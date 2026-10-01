@@ -4,7 +4,13 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# Токен из настроек Render (MAX_BOT_TOKEN)
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
+
+# Официальный базовый URL API МАКС
+BASE_URL = "https://platform-api2.max.ru"
+
+# URL вебхука вашего сервера на Render
 WEBHOOK_URL = "https://max-downloader-bot.onrender.com/webhook"
 
 COBALT_APIS = [
@@ -13,26 +19,28 @@ COBALT_APIS = [
     "https://api.hyper.lol/api/json"
 ]
 
+def get_headers():
+    return {
+        "Authorization": f"Bearer {TOKEN}",
+        "Content-Type": "application/json"
+    }
+
 def set_webhook_auto():
-    """Автоматическая привязка вебхука при старте"""
+    """Автоматическая привязка вебхука через правильный метод MAX API"""
     if not TOKEN:
         print("❌ Ошибка: Переменная MAX_BOT_TOKEN не найдена!")
         return
     
-    api_endpoints = [
-        f"https://api.max.ru/bot{TOKEN}/setWebhook",
-        f"https://api.max.ru/v1/bot{TOKEN}/setWebhook",
-        f"https://platform.max.ru/api/bot{TOKEN}/setWebhook"
-    ]
+    url = f"{BASE_URL}/subscriptions"
+    payload = {
+        "url": WEBHOOK_URL
+    }
     
-    for url in api_endpoints:
-        try:
-            res = requests.post(url, json={"url": WEBHOOK_URL}, timeout=5)
-            print(f"Попытка привязки Webhook ({url}): status {res.status_code}, response: {res.text}")
-            if res.status_code == 200:
-                break
-        except Exception as e:
-            print(f"Ошибка запроса вебхука: {e}")
+    try:
+        res = requests.post(url, json=payload, headers=get_headers(), timeout=10)
+        print(f"Подключение Webhook: status {res.status_code}, response: {res.text}")
+    except Exception as e:
+        print(f"Ошибка подписки на Webhook: {e}")
 
 def get_media_url(url):
     headers = {
@@ -57,21 +65,20 @@ def get_media_url(url):
     return None
 
 def send_message(chat_id, text):
-    if not TOKEN:
+    if not TOKEN or not chat_id:
         return
     
-    api_endpoints = [
-        f"https://api.max.ru/bot{TOKEN}/sendMessage",
-        f"https://api.max.ru/v1/bot{TOKEN}/sendMessage"
-    ]
+    url = f"{BASE_URL}/messages"
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
     
-    for url in api_endpoints:
-        try:
-            res = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
-            if res.status_code == 200:
-                break
-        except Exception as e:
-            print(f"Ошибка отправки сообщения: {e}")
+    try:
+        res = requests.post(url, json=payload, headers=get_headers(), timeout=10)
+        print(f"Отправка сообщения: status {res.status_code}, response: {res.text}")
+    except Exception as e:
+        print(f"Ошибка отправки сообщения: {e}")
 
 @app.route('/', methods=['GET'])
 def health_check():
@@ -82,9 +89,11 @@ def webhook():
     data = request.get_json(silent=True) or {}
     print(f"📥 Входящие данные от МАКС: {data}")
     
-    message = data.get("message", {})
-    text = message.get("text", "").strip()
-    chat_id = message.get("chat", {}).get("id")
+    # Разбор структуры сообщений МАКС
+    message = data.get("message") or data.get("object", {})
+    text = (message.get("text") or message.get("body", "")).strip()
+    
+    chat_id = message.get("chat_id") or message.get("chat", {}).get("id") or message.get("recipient", {}).get("chat_id")
 
     if chat_id and text:
         if text.startswith("/start"):
@@ -104,6 +113,7 @@ def webhook():
 
     return jsonify({"status": "ok"}), 200
 
+# Автоустановка вебхука при старте
 set_webhook_auto()
 
 if __name__ == "__main__":
