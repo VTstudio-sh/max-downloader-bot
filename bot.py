@@ -11,7 +11,7 @@ TOKEN = os.environ.get("MAX_BOT_TOKEN")
 BASE_URL = "https://platform-api2.max.ru"
 
 HEADERS = {
-    "Authorization": f"Bearer {TOKEN}",
+    "Authorization": f"{TOKEN}",
     "Content-Type": "application/json"
 }
 
@@ -30,7 +30,7 @@ def download_and_send(chat_id, video_url):
             ydl.download([video_url])
             
         # 2. Отправляем медиафайл в чат MAX
-        upload_headers = {"Authorization": f"Bearer {TOKEN}"}
+        upload_headers = {"Authorization": f"{TOKEN}"}
         with open(filename, 'rb') as f:
             files = {'file': f}
             data = {'chat_id': chat_id}
