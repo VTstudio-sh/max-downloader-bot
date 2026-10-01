@@ -1,15 +1,8 @@
 import os
-import time
-import threading
-from flask import Flask
+from flask import Flask, request, jsonify
 import requests
 
-# Инициализация веб-сервера для Render (чтобы Web Service не падала)
 app = Flask(__name__)
-
-@app.route('/')
-def health_check():
-    return "MAX Bot is alive!", 200
 
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
 API_URL = f"https://api.max.ru/bot{TOKEN}" if TOKEN else ""
@@ -53,56 +46,37 @@ def send_message(chat_id, text):
     except Exception as e:
         print(f"Error sending message: {e}")
 
-def get_updates(offset=None):
-    if not API_URL:
-        return []
-    try:
-        res = requests.get(f"{API_URL}/getUpdates", params={"offset": offset, "timeout": 20}, timeout=25)
-        data = res.json()
-        if data.get("ok"):
-            return data.get("result", [])
-    except Exception:
-        pass
-    return []
+@app.route('/', methods=['GET'])
+def health_check():
+    return "MAX Bot is alive!", 200
 
-def bot_loop():
-    print("Бот МАКС запущен...")
-    offset = None
-    while True:
-        updates = get_updates(offset)
-        for update in updates:
-            offset = update["update_id"] + 1
-            message = update.get("message", {})
-            text = message.get("text", "").strip()
-            chat_id = message.get("chat", {}).get("id")
+# Приём сообщений от МАКС через Webhook
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.get_json(silent=True) or {}
+    print(f"Получены данные от МАКС: {data}")
+    
+    message = data.get("message", {})
+    text = message.get("text", "").strip()
+    chat_id = message.get("chat", {}).get("id")
 
-            if not chat_id or not text:
-                continue
-
-            if text.startswith("/start"):
-                send_message(chat_id, "Привет! Пришли мне ссылку на видео или фото из VK, YouTube, Instagram, Pinterest или TikTok, и я её скачаю.")
-                continue
-
-            if not text.startswith(("http://", "https://")):
-                send_message(chat_id, "Отправь корректную ссылку на видео или фото.")
-                continue
-
+    if chat_id and text:
+        if text.startswith("/start"):
+            send_message(chat_id, "Привет! Пришли мне ссылку на видео или фото из VK, YouTube, Instagram, Pinterest или TikTok, и я её скачаю.")
+        elif not text.startswith(("http://", "https://")):
+            send_message(chat_id, "Отправь корректную ссылку на видео или фото.")
+        else:
             send_message(chat_id, "🔄 Обрабатываю ссылку...")
             media_result = get_media_url(text)
 
             if not media_result:
                 send_message(chat_id, "❌ Не удалось обработать эту ссылку.")
-                continue
-
-            if isinstance(media_result, list):
-                send_message(chat_id, f"✅ Найдено файлов: {len(media_result)}. Вот ссылки:\n" + "\n".join(media_result[:5]))
+            elif isinstance(media_result, list):
+                send_message(chat_id, f"✅ Найдено файлов: {len(media_result)}.\n" + "\n".join(media_result[:5]))
             else:
                 send_message(chat_id, f"📥 Твоя ссылка на скачивание:\n{media_result}")
-        
-        time.sleep(1)
 
-# Запуск бота в отдельном потоке
-threading.Thread(target=bot_loop, daemon=True).start()
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
