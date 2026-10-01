@@ -11,7 +11,7 @@ TOKEN = os.environ.get("MAX_BOT_TOKEN")
 BASE_URL = "https://platform-api2.max.ru"
 
 HEADERS = {
-    "Authorization": f"{TOKEN}",
+    "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json"
 }
 
@@ -24,21 +24,29 @@ def download_and_send(chat_id, video_url):
     }
     
     try:
-        # 1. Скачиваем видео
+        # 1. Скачиваем видео во временный файл
+        print(f"Начинаем скачивание: {video_url}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        # 2. Отправляем файл в чат MAX без SSL проверки
-        upload_headers = {"Authorization": f"{TOKEN}"}
+        # 2. Отправляем медиафайл в чат MAX
+        upload_headers = {"Authorization": f"Bearer {TOKEN}"}
         with open(filename, 'rb') as f:
             files = {'file': f}
             data = {'chat_id': chat_id}
-            res = requests.post(f"{BASE_URL}/messages", headers=upload_headers, data=data, files=files, verify=False)
-            print(f"Статус отправки: {res.status_code}")
+            res = requests.post(
+                f"{BASE_URL}/messages", 
+                headers=upload_headers, 
+                data=data, 
+                files=files, 
+                verify=False
+            )
+            print(f"Статус отправки видео: {res.status_code}")
             
     except Exception as e:
-        print(f"Ошибка при обработке: {e}")
+        print(f"Ошибка при обработке видео: {e}")
     finally:
+        # 3. Автоматическое удаление файла после отправки
         if os.path.exists(filename):
             os.remove(filename)
 
@@ -48,7 +56,7 @@ def main():
     
     while True:
         try:
-            # Запрос обновлений без SSL проверки
+            # Лонг-полинг запрос к API MAX
             response = requests.get(
                 f"{BASE_URL}/updates", 
                 headers=HEADERS, 
