@@ -1,7 +1,11 @@
 import os
 import time
 import requests
+import urllib3
 import yt_dlp
+
+# Отключаем предупреждения о неиспользуемой SSL-проверке
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
 BASE_URL = "https://platform-api2.max.ru"
@@ -24,12 +28,12 @@ def download_and_send(chat_id, video_url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        # 2. Отправляем файл в чат MAX
+        # 2. Отправляем файл в чат MAX без SSL проверки
         upload_headers = {"Authorization": f"{TOKEN}"}
         with open(filename, 'rb') as f:
             files = {'file': f}
             data = {'chat_id': chat_id}
-            res = requests.post(f"{BASE_URL}/messages", headers=upload_headers, data=data, files=files)
+            res = requests.post(f"{BASE_URL}/messages", headers=upload_headers, data=data, files=files, verify=False)
             print(f"Статус отправки: {res.status_code}")
             
     except Exception as e:
@@ -44,11 +48,12 @@ def main():
     
     while True:
         try:
-            # Запрос обновлений
+            # Запрос обновлений без SSL проверки
             response = requests.get(
                 f"{BASE_URL}/updates", 
                 headers=HEADERS, 
-                params={'offset': last_update_id + 1, 'timeout': 30}
+                params={'offset': last_update_id + 1, 'timeout': 30},
+                verify=False
             )
             
             if response.status_code == 200:
