@@ -1,0 +1,2 @@
+max-botapi-python
+requests
