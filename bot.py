@@ -63,7 +63,7 @@ def download_and_send(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен и перешел в режим стабильного опроса...")
+    print("Бот запущен и готов обрабатывать ссылки...")
     current_marker = None
 
     while True:
@@ -72,7 +72,6 @@ def main():
             if current_marker:
                 params['marker'] = current_marker
                 
-            # Увеличиваем таймаут запроса до 45 секунд, чтобы избежать обрывов
             response = requests.get(
                 f"{BASE_URL}/updates", 
                 headers=HEADERS, 
@@ -84,27 +83,30 @@ def main():
             if response.status_code == 200:
                 data = response.json()
                 
-                # Обновляем маркер для следующего запроса
                 if "marker" in data:
                     current_marker = data["marker"]
                 
                 updates = data.get("updates", [])
                 for update in updates:
-                    print(f"Получен апдейт: {update}")
-                    message = update.get("message", update)
-                    chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
+                    message = update.get("message", {})
+                    
+                    # Точное извлечение chat_id из структуры recipient или message
+                    recipient = message.get("recipient", {})
+                    chat_id = recipient.get("chat_id") or message.get("chat_id")
+                    
                     text = message.get("text", "")
                     
-                    if text and ("http://" in text or "https://" in text):
+                    print(f"Распознан чат ID: {chat_id}, текст: {text}")
+                    
+                    if chat_id and text and ("http://" in text or "https://" in text):
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
                         download_and_send(chat_id, url)
             else:
-                print(f"Ошибка API. Код: {response.status_code}, Текст: {response.text}")
+                print(f"Ошибка API. Код: {response.status_code}")
                 time.sleep(5)
                         
         except requests.exceptions.Timeout:
-            # Таймаут при лонг-полинг — это норма, просто повторяем запрос
             continue
         except Exception as e:
             print(f"Ошибка в цикле: {e}")
