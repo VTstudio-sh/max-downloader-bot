@@ -3,14 +3,16 @@ import time
 import requests
 import yt_dlp
 
-# Берем токен из настроек
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
-API_URL = f"https://api.max.ru/bot{TOKEN}"  # Укажи точный URL API платформы Макс
+BASE_URL = "https://platform-api.max.ru"
+
+HEADERS = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json"
+}
 
 def download_and_send(chat_id, video_url):
     filename = f"video_{chat_id}.mp4"
-    
-    # Настройка скачивания видео
     ydl_opts = {
         'format': 'mp4/best',
         'outtmpl': filename,
@@ -18,20 +20,22 @@ def download_and_send(chat_id, video_url):
     }
     
     try:
-        # 1. Скачиваем видео во временный файл
+        # 1. Скачивание видео во временный файл
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        # 2. Отправляем именно файл (с кнопкой Play ▶️)
+        # 2. Отправка медиафайла в чат MAX
+        upload_headers = {"Authorization": f"Bearer {TOKEN}"}
         with open(filename, 'rb') as f:
-            files = {'video': f}
+            files = {'file': f}
             data = {'chat_id': chat_id}
-            requests.post(f"{API_URL}/sendVideo", data=data, files=files)
+            res = requests.post(f"{BASE_URL}/v1/messages/sendMedia", headers=upload_headers, data=data, files=files)
+            print(f"Отправка видео: {res.status_code}")
             
     except Exception as e:
         print(f"Ошибка при обработке: {e}")
     finally:
-        # 3. Сразу удаляем файл с сервера
+        # 3. Автоматическое удаление файла после отправки
         if os.path.exists(filename):
             os.remove(filename)
 
@@ -39,22 +43,28 @@ def main():
     print("Бот успешно запущен!")
     last_update_id = 0
     
-    # Бесконечный цикл опроса (Long Polling)
     while True:
         try:
-            # Запрашиваем новые сообщения
-            response = requests.get(f"{API_URL}/getUpdates", params={'offset': last_update_id + 1, 'timeout': 30})
-            data = response.json()
+            # Лонг-полинг запрос к API MAX
+            response = requests.get(
+                f"{BASE_URL}/v1/updates", 
+                headers=HEADERS, 
+                params={'offset': last_update_id + 1, 'timeout': 30}
+            )
             
-            if data.get("ok"):
-                for update in data.get("result", []):
-                    last_update_id = update["update_id"]
+            if response.status_code == 200:
+                data = response.json()
+                for update in data.get("updates", []):
+                    last_update_id = update.get("update_id", last_update_id)
                     message = update.get("message", {})
-                    chat_id = message.get("chat", {}).get("id")
+                    chat_id = message.get("chat_id")
                     text = message.get("text", "")
                     
-                    if text.startswith("http"):
+                    if text and text.startswith("http"):
                         download_and_send(chat_id, text)
+            else:
+                print(f"Ошибка API (код {response.status_code}): {response.text}")
+                time.sleep(5)
                         
         except Exception as e:
             print(f"Ошибка в цикле: {e}")
