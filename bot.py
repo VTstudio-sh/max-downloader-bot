@@ -1,16 +1,15 @@
 import os
 import requests
+import urllib3
 from flask import Flask, request, jsonify
+
+# Отключаем предупреждения об отключенной проверке SSL-сертификата
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Токен из настроек Render (MAX_BOT_TOKEN)
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
-
-# Официальный базовый URL API МАКС
 BASE_URL = "https://platform-api2.max.ru"
-
-# URL вебхука вашего сервера на Render
 WEBHOOK_URL = "https://max-downloader-bot.onrender.com/webhook"
 
 COBALT_APIS = [
@@ -26,18 +25,16 @@ def get_headers():
     }
 
 def set_webhook_auto():
-    """Автоматическая привязка вебхука через правильный метод MAX API"""
     if not TOKEN:
         print("❌ Ошибка: Переменная MAX_BOT_TOKEN не найдена!")
         return
     
     url = f"{BASE_URL}/subscriptions"
-    payload = {
-        "url": WEBHOOK_URL
-    }
+    payload = {"url": WEBHOOK_URL}
     
     try:
-        res = requests.post(url, json=payload, headers=get_headers(), timeout=10)
+        # verify=False обходит ошибку SSL-сертификата на Render
+        res = requests.post(url, json=payload, headers=get_headers(), timeout=10, verify=False)
         print(f"Подключение Webhook: status {res.status_code}, response: {res.text}")
     except Exception as e:
         print(f"Ошибка подписки на Webhook: {e}")
@@ -75,7 +72,7 @@ def send_message(chat_id, text):
     }
     
     try:
-        res = requests.post(url, json=payload, headers=get_headers(), timeout=10)
+        res = requests.post(url, json=payload, headers=get_headers(), timeout=10, verify=False)
         print(f"Отправка сообщения: status {res.status_code}, response: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки сообщения: {e}")
@@ -89,10 +86,8 @@ def webhook():
     data = request.get_json(silent=True) or {}
     print(f"📥 Входящие данные от МАКС: {data}")
     
-    # Разбор структуры сообщений МАКС
     message = data.get("message") or data.get("object", {})
     text = (message.get("text") or message.get("body", "")).strip()
-    
     chat_id = message.get("chat_id") or message.get("chat", {}).get("id") or message.get("recipient", {}).get("chat_id")
 
     if chat_id and text:
@@ -113,7 +108,6 @@ def webhook():
 
     return jsonify({"status": "ok"}), 200
 
-# Автоустановка вебхука при старте
 set_webhook_auto()
 
 if __name__ == "__main__":
