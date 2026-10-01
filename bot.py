@@ -63,7 +63,7 @@ def download_and_send(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен и готов обрабатывать ссылки...")
+    print("Бот запущен в режиме расширенного поиска текста...")
     current_marker = None
 
     while True:
@@ -90,13 +90,23 @@ def main():
                 for update in updates:
                     message = update.get("message", {})
                     
-                    # Точное извлечение chat_id из структуры recipient или message
+                    # Извлекаем chat_id
                     recipient = message.get("recipient", {})
                     chat_id = recipient.get("chat_id") or message.get("chat_id")
                     
-                    text = message.get("text", "")
+                    # Пробуем достать текст из разных возможных полей
+                    body = message.get("body", {})
+                    text = body.get("text") or message.get("text", "")
                     
-                    print(f"Распознан чат ID: {chat_id}, текст: {text}")
+                    # Если текст пустой, проверяем markup (иногда ссылки приходят там)
+                    if not text:
+                        markup = body.get("markup", [])
+                        for item in markup:
+                            if isinstance(item, dict) and "url" in item:
+                                text = item["url"]
+                                break
+                    
+                    print(f"Чат ID: {chat_id} | Найденный текст/ссылка: {text}")
                     
                     if chat_id and text and ("http://" in text or "https://" in text):
                         words = text.split()
