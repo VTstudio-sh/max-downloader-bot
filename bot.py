@@ -16,7 +16,17 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+def send_text(chat_id, text):
+    """Отправка текстового сообщения"""
+    try:
+        data = {"chat_id": chat_id, "text": text}
+        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False)
+        print(f"Ответ на отправку текста: {res.status_code}")
+    except Exception as e:
+        print(f"Ошибка отправки текста: {e}")
+
 def download_and_send(chat_id, video_url):
+    """Скачивание и отправка видеофайла"""
     filename = f"video_{chat_id}.mp4"
     ydl_opts = {
         'format': 'mp4/best',
@@ -25,19 +35,19 @@ def download_and_send(chat_id, video_url):
     }
     
     try:
-        # 1. Скачиваем видео во временный файл
+        send_text(chat_id, "Ссылка получена! Начинаю скачивание видео...")
         print(f"Начинаем скачивание: {video_url}")
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        # 2. Отправляем медиафайл в чат MAX
-        upload_headers = {"Authorization": TOKEN}
+        print("Видео скачано, отправляем файл...")
         with open(filename, 'rb') as f:
             files = {'file': f}
             data = {'chat_id': chat_id}
             res = requests.post(
                 f"{BASE_URL}/messages", 
-                headers=upload_headers, 
+                headers={"Authorization": TOKEN}, 
                 data=data, 
                 files=files, 
                 verify=False
@@ -46,19 +56,17 @@ def download_and_send(chat_id, video_url):
             
     except Exception as e:
         print(f"Ошибка при обработке видео: {e}")
+        send_text(chat_id, f"Произошла ошибка при скачивании: {e}")
     finally:
-        # 3. Автоматическое удаление файла после отправки
         if os.path.exists(filename):
             os.remove(filename)
 
 def main():
-    print("Бот запускается...")
-    print(f"Длина токена: {len(TOKEN)} символов. Первые 5 символов: {TOKEN[:5]}...")
+    print("Бот успешно запущен и ожидает сообщений...")
     last_update_id = 0
     
     while True:
         try:
-            # Лонг-полинг запрос к API MAX
             response = requests.get(
                 f"{BASE_URL}/updates", 
                 headers=HEADERS, 
@@ -68,14 +76,27 @@ def main():
             
             if response.status_code == 200:
                 data = response.json()
-                for update in data.get("updates", []):
-                    last_update_id = update.get("update_id", last_update_id)
-                    message = update.get("message", {})
-                    chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
-                    text = message.get("text", "")
-                    
-                    if text and text.startswith("http"):
-                        download_and_send(chat_id, text)
+                
+                # Печатаем пришедшие данные в логи для отладки
+                if data:
+                    print(f"Получены данные от API: {data}")
+
+                # Гибкий разбор структуры (как списков, так и словарей)
+                updates = data if isinstance(data, list) else data.get("updates", data.get("result", []))
+                
+                for update in updates:
+                    if isinstance(update, dict):
+                        last_update_id = update.get("update_id", last_update_id)
+                        message = update.get("message", update)
+                        
+                        chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
+                        text = message.get("text", "")
+                        
+                        if text and ("http://" in text or "https://" in text):
+                            # Извлекаем ссылку, если в сообщении есть превью/текст
+                            words = text.split()
+                            url = next((w for w in words if w.startswith("http")), text)
+                            download_and_send(chat_id, url)
             else:
                 print(f"Ответ API (код {response.status_code}): {response.text}")
                 time.sleep(5)
