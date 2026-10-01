@@ -7,11 +7,12 @@ import yt_dlp
 # Отключаем предупреждения о неиспользуемой SSL-проверке
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-TOKEN = os.environ.get("MAX_BOT_TOKEN")
+# Получаем токен и очищаем от возможных лишних пробелов/переносов
+TOKEN = (os.environ.get("MAX_BOT_TOKEN") or "").strip()
 BASE_URL = "https://platform-api2.max.ru"
 
 HEADERS = {
-    "Authorization": f"{TOKEN}",
+    "Authorization": TOKEN,
     "Content-Type": "application/json"
 }
 
@@ -30,7 +31,7 @@ def download_and_send(chat_id, video_url):
             ydl.download([video_url])
             
         # 2. Отправляем медиафайл в чат MAX
-        upload_headers = {"Authorization": f"{TOKEN}"}
+        upload_headers = {"Authorization": TOKEN}
         with open(filename, 'rb') as f:
             files = {'file': f}
             data = {'chat_id': chat_id}
@@ -51,7 +52,12 @@ def download_and_send(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот успешно запущен!")
+    print("Бот запускается...")
+    if not TOKEN:
+        print("ОШИБКА: Переменная MAX_BOT_TOKEN не найдена в Railway Variables!")
+        return
+    
+    print(f"Длина токена: {len(TOKEN)} символов. Первые 5 символов: {TOKEN[:5]}...")
     last_update_id = 0
     
     while True:
