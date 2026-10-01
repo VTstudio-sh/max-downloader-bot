@@ -7,8 +7,8 @@ import yt_dlp
 # Отключаем предупреждения о неиспользуемой SSL-проверке
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Получаем токен и очищаем от возможных лишних пробелов/переносов
-TOKEN = (os.environ.get("MAX_BOT_TOKEN") or "").strip()
+# Токен бота MAX
+TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://platform-api2.max.ru"
 
 HEADERS = {
@@ -53,10 +53,6 @@ def download_and_send(chat_id, video_url):
 
 def main():
     print("Бот запускается...")
-    if not TOKEN:
-        print("ОШИБКА: Переменная MAX_BOT_TOKEN не найдена в Railway Variables!")
-        return
-    
     print(f"Длина токена: {len(TOKEN)} символов. Первые 5 символов: {TOKEN[:5]}...")
     last_update_id = 0
     
