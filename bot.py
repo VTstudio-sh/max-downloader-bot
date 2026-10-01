@@ -1,6 +1,15 @@
 import os
 import time
+import threading
+from flask import Flask
 import requests
+
+# Инициализация веб-сервера для Render (чтобы Web Service не падала)
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    return "MAX Bot is alive!", 200
 
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
 API_URL = f"https://api.max.ru/bot{TOKEN}" if TOKEN else ""
@@ -56,7 +65,7 @@ def get_updates(offset=None):
         pass
     return []
 
-def main():
+def bot_loop():
     print("Бот МАКС запущен...")
     offset = None
     while True:
@@ -92,5 +101,9 @@ def main():
         
         time.sleep(1)
 
+# Запуск бота в отдельном потоке
+threading.Thread(target=bot_loop, daemon=True).start()
+
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
