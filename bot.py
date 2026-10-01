@@ -62,50 +62,58 @@ def download_and_send(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен, проверяем связь с API...")
+    print("Бот запущен и настроен на работу с marker...")
     
-    # Сделаем тестовый запрос, чтобы проверить доступность метода updates
+    current_marker = None
+    
+    # Сначала делаем быстрый запрос, чтобы получить актуальный стартовый marker
     try:
-        test_res = requests.get(f"{BASE_URL}/updates", headers=HEADERS, verify=False, timeout=10)
-        print(f"Тестовый ответ от /updates -> Код: {test_res.status_code}, Тело: {test_res.text}")
+        init_res = requests.get(f"{BASE_URL}/updates", headers=HEADERS, verify=False, timeout=10)
+        if init_res.status_code == 200:
+            init_data = init_res.json()
+            current_marker = init_data.get("marker")
+            print(f"Стартовый marker установлен: {current_marker}")
     except Exception as e:
-        print(f"Ошибка тестового запроса: {e}")
+        print(f"Не удалось получить начальный marker: {e}")
 
-    last_update_id = 0
-    
     while True:
         try:
+            params = {'timeout': 30}
+            if current_marker:
+                params['marker'] = current_marker
+                
             response = requests.get(
                 f"{BASE_URL}/updates", 
                 headers=HEADERS, 
-                params={'offset': last_update_id + 1, 'timeout': 30},
+                params=params,
                 verify=False
             )
             
-            # Логируем каждый ответ, чтобы видеть, пустой он или нет
-            print(f"getStatus: {response.status_code}, text: {response.text}")
-            
             if response.status_code == 200:
-                if response.text and response.text.strip():
-                    try:
-                        data = response.json()
-                        updates = data if isinstance(data, list) else data.get("updates", data.get("result", []))
-                        
-                        for update in updates:
-                            if isinstance(update, dict):
-                                last_update_id = update.get("update_id", last_update_id)
-                                message = update.get("message", update)
-                                
-                                chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
-                                text = message.get("text", "")
-                                
-                                if text and ("http://" in text or "https://" in text):
-                                    words = text.split()
-                                    url = next((w for w in words if w.startswith("http")), text)
-                                    download_and_send(chat_id, url)
-                    except Exception as json_err:
-                        print(f"Ошибка разбора JSON: {json_err}")
+                data = response.json()
+                
+                # Обновляем маркер для следующего запроса, если он пришел
+                if "marker" in data:
+                    current_marker = data["marker"]
+                
+                updates = data.get("updates", [])
+                if updates:
+                    print(f"Получено новых апдейтов: {len(updates)}")
+                    
+                for update in updates:
+                    # Логируем содержимое апдейта для отладки
+                    print(f"Апдейт: {update}")
+                    
+                    message = update.get("message", update)
+                    chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
+                    text = message.get("text", "")
+                    
+                    if text and ("http://" in text or "https://" in text):
+                        words = text.split()
+                        url = next((w for w in words if w.startswith("http")), text)
+                        download_and_send(chat_id, url)
             else:
+                print(f"Ошибка получения апдейтов. Код: {response.status_code}, Текст: {response.text}")
                 time.sleep(5)
                         
         except Exception as e:
