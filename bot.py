@@ -1,17 +1,38 @@
 import os
-from flask import Flask, request, jsonify
 import requests
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 TOKEN = os.environ.get("MAX_BOT_TOKEN")
-API_URL = f"https://api.max.ru/bot{TOKEN}" if TOKEN else ""
+WEBHOOK_URL = "https://max-downloader-bot.onrender.com/webhook"
 
 COBALT_APIS = [
     "https://api.cobalt.tools/api/json",
     "https://cobalt-api.kwiatek.xyz/api/json",
     "https://api.hyper.lol/api/json"
 ]
+
+def set_webhook_auto():
+    """Автоматическая привязка вебхука при старте"""
+    if not TOKEN:
+        print("❌ Ошибка: Переменная MAX_BOT_TOKEN не найдена!")
+        return
+    
+    api_endpoints = [
+        f"https://api.max.ru/bot{TOKEN}/setWebhook",
+        f"https://api.max.ru/v1/bot{TOKEN}/setWebhook",
+        f"https://platform.max.ru/api/bot{TOKEN}/setWebhook"
+    ]
+    
+    for url in api_endpoints:
+        try:
+            res = requests.post(url, json={"url": WEBHOOK_URL}, timeout=5)
+            print(f"Попытка привязки Webhook ({url}): status {res.status_code}, response: {res.text}")
+            if res.status_code == 200:
+                break
+        except Exception as e:
+            print(f"Ошибка запроса вебхука: {e}")
 
 def get_media_url(url):
     headers = {
@@ -36,25 +57,30 @@ def get_media_url(url):
     return None
 
 def send_message(chat_id, text):
-    if not API_URL:
+    if not TOKEN:
         return
-    try:
-        requests.post(f"{API_URL}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": text
-        }, timeout=10)
-    except Exception as e:
-        print(f"Error sending message: {e}")
+    
+    api_endpoints = [
+        f"https://api.max.ru/bot{TOKEN}/sendMessage",
+        f"https://api.max.ru/v1/bot{TOKEN}/sendMessage"
+    ]
+    
+    for url in api_endpoints:
+        try:
+            res = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+            if res.status_code == 200:
+                break
+        except Exception as e:
+            print(f"Ошибка отправки сообщения: {e}")
 
 @app.route('/', methods=['GET'])
 def health_check():
     return "MAX Bot is alive!", 200
 
-# Приём сообщений от МАКС через Webhook
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json(silent=True) or {}
-    print(f"Получены данные от МАКС: {data}")
+    print(f"📥 Входящие данные от МАКС: {data}")
     
     message = data.get("message", {})
     text = message.get("text", "").strip()
@@ -77,6 +103,8 @@ def webhook():
                 send_message(chat_id, f"📥 Твоя ссылка на скачивание:\n{media_result}")
 
     return jsonify({"status": "ok"}), 200
+
+set_webhook_auto()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
