@@ -62,7 +62,15 @@ def download_and_send(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот успешно запущен и ожидает сообщений...")
+    print("Бот запущен, проверяем связь с API...")
+    
+    # Сделаем тестовый запрос, чтобы проверить доступность метода updates
+    try:
+        test_res = requests.get(f"{BASE_URL}/updates", headers=HEADERS, verify=False, timeout=10)
+        print(f"Тестовый ответ от /updates -> Код: {test_res.status_code}, Тело: {test_res.text}")
+    except Exception as e:
+        print(f"Ошибка тестового запроса: {e}")
+
     last_update_id = 0
     
     while True:
@@ -74,31 +82,30 @@ def main():
                 verify=False
             )
             
+            # Логируем каждый ответ, чтобы видеть, пустой он или нет
+            print(f"getStatus: {response.status_code}, text: {response.text}")
+            
             if response.status_code == 200:
-                data = response.json()
-                
-                # Печатаем пришедшие данные в логи для отладки
-                if data:
-                    print(f"Получены данные от API: {data}")
-
-                # Гибкий разбор структуры (как списков, так и словарей)
-                updates = data if isinstance(data, list) else data.get("updates", data.get("result", []))
-                
-                for update in updates:
-                    if isinstance(update, dict):
-                        last_update_id = update.get("update_id", last_update_id)
-                        message = update.get("message", update)
+                if response.text and response.text.strip():
+                    try:
+                        data = response.json()
+                        updates = data if isinstance(data, list) else data.get("updates", data.get("result", []))
                         
-                        chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
-                        text = message.get("text", "")
-                        
-                        if text and ("http://" in text or "https://" in text):
-                            # Извлекаем ссылку, если в сообщении есть превью/текст
-                            words = text.split()
-                            url = next((w for w in words if w.startswith("http")), text)
-                            download_and_send(chat_id, url)
+                        for update in updates:
+                            if isinstance(update, dict):
+                                last_update_id = update.get("update_id", last_update_id)
+                                message = update.get("message", update)
+                                
+                                chat_id = message.get("chat_id") or message.get("chat", {}).get("id")
+                                text = message.get("text", "")
+                                
+                                if text and ("http://" in text or "https://" in text):
+                                    words = text.split()
+                                    url = next((w for w in words if w.startswith("http")), text)
+                                    download_and_send(chat_id, url)
+                    except Exception as json_err:
+                        print(f"Ошибка разбора JSON: {json_err}")
             else:
-                print(f"Ответ API (код {response.status_code}): {response.text}")
                 time.sleep(5)
                         
         except Exception as e:
