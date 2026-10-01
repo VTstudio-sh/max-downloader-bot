@@ -28,10 +28,14 @@ def send_text(chat_id, text):
 def download_and_send(chat_id, video_url):
     """Скачивание и отправка видеофайла"""
     filename = f"video_{chat_id}.mp4"
+    
+    # Настройки yt-dlp с обходом ограничений YouTube и эмуляцией клиента
     ydl_opts = {
         'format': 'mp4/best',
         'outtmpl': filename,
         'quiet': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        'no_check_certificate': True,
     }
     
     try:
@@ -63,10 +67,10 @@ def download_and_send(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен в режиме расширенного поиска текста...")
+    print("Бот запущен с обновленным обходом блокировок...")
     current_marker = None
 
-    while True:
+    while TimeKeeper := True:
         try:
             params = {'timeout': 30}
             if current_marker:
@@ -89,16 +93,12 @@ def main():
                 updates = data.get("updates", [])
                 for update in updates:
                     message = update.get("message", {})
-                    
-                    # Извлекаем chat_id
                     recipient = message.get("recipient", {})
                     chat_id = recipient.get("chat_id") or message.get("chat_id")
                     
-                    # Пробуем достать текст из разных возможных полей
                     body = message.get("body", {})
                     text = body.get("text") or message.get("text", "")
                     
-                    # Если текст пустой, проверяем markup (иногда ссылки приходят там)
                     if not text:
                         markup = body.get("markup", [])
                         for item in markup:
@@ -106,14 +106,11 @@ def main():
                                 text = item["url"]
                                 break
                     
-                    print(f"Чат ID: {chat_id} | Найденный текст/ссылка: {text}")
-                    
                     if chat_id and text and ("http://" in text or "https://" in text):
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
                         download_and_send(chat_id, url)
             else:
-                print(f"Ошибка API. Код: {response.status_code}")
                 time.sleep(5)
                         
         except requests.exceptions.Timeout:
