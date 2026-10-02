@@ -24,58 +24,32 @@ def send_text(chat_id, text):
         print(f"Ошибка отправки текста: {e}")
 
 def process_smart_video(chat_id, video_url):
-    filename = f"video_{chat_id}.mp4"
-    
     ydl_opts_optimal = {
         'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
-        'outtmpl': filename,
         'quiet': True,
         'no_check_certificate': True,
-        'concurrent_fragment_downloads': 4,
     }
     
     try:
-        send_text(chat_id, "⚡ Скачиваю видео...")
+        send_text(chat_id, "⚡ Получаю прямую ссылку на файл...")
         
+        # Достаем прямую ссылку на медиапоток без скачивания на сервер
         with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
-            ydl.download([video_url])
+            info = ydl.extract_info(video_url, download=False)
+            direct_url = info.get('url')
             
-        if os.path.exists(filename):
-            file_size = os.path.getsize(filename) / (1024 * 1024)
-            print(f"Видео успешно обработано. Размер: {file_size:.2f} МБ")
-            
-            CHAT_LIMIT_MB = 30 
-            
-            if file_size <= CHAT_LIMIT_MB:
-                send_text(chat_id, f"📤 Отправляю видео в чат ({file_size:.1f} МБ)...")
-                
-                # Отправляем сам файл через multipart/form-data
-                with open(filename, 'rb') as f:
-                    files = {'file': f}
-                    params = {'user_id': chat_id}
-                    res = requests.post(
-                        f"{BASE_URL}/messages", 
-                        headers={"Authorization": TOKEN}, 
-                        params=params,
-                        files=files, 
-                        verify=False,
-                        timeout=180
-                    )
-                    print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
-                    if res.status_code != 200:
-                        send_text(chat_id, f"❌ Ошибка отправки файла (код {res.status_code}).")
-            else:
-                send_text(chat_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита чата (30 МБ).\n\n🔗 Оригинальная ссылка: {video_url}")
+        if direct_url:
+            # Отправляем ту самую прямую ссылку, по которой файл сразу скачивается
+            send_text(chat_id, f"📥 Прямая ссылка для скачивания файла:\n\n{direct_url}")
+        else:
+            send_text(chat_id, "❌ Не удалось получить прямую ссылку на видео.")
                 
     except Exception as e:
         print(f"Ошибка обработки: {e}")
-        send_text(chat_id, f"❌ Ошибка: {e}")
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
+        send_text(chat_id, f"❌ Произошла ошибка при обработке ссылки: {e}")
 
 def main():
-    print("Бот запущен и настроен на отправку файлов...")
+    print("Бот запущен и настроен на выдачу прямых ссылок для скачивания...")
     current_marker = None
 
     while True:
@@ -123,4 +97,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
