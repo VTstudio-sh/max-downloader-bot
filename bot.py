@@ -15,22 +15,29 @@ HEADERS = {
 }
 
 def send_message_with_qualities(chat_id, video_url):
-    """Отправляет сообщение с кнопками выбора качества видео"""
+    """Отправляет сообщение с кнопками выбора качества через массив attachments, как требует MAX"""
     try:
         params = {"user_id": chat_id}
         
-        # Структура кнопок выбора качества (как в том боте)
+        # Правильная структура для MAX: инлайн-клавиатура внутри attachments
         data = {
             "text": f"Выберите качество:\n{video_url}",
-            "inline_keyboard": [
-                [
-                    {"text": "1080p", "callback_data": f"1080|{video_url}"},
-                    {"text": "720p", "callback_data": f"720|{video_url}"}
-                ],
-                [
-                    {"text": "480p", "callback_data": f"480|{video_url}"},
-                    {"text": "360p", "callback_data": f"360|{video_url}"}
-                ]
+            "attachments": [
+                {
+                    "type": "inline_keyboard",
+                    "payload": {
+                        "inline_keyboard": [
+                            [
+                                {"text": "1080p", "callback_data": f"1080|{video_url}"},
+                                {"text": "720p", "callback_data": f"720|{video_url}"}
+                            ],
+                            [
+                                {"text": "480p", "callback_data": f"480|{video_url}"},
+                                {"text": "360p", "callback_data": f"360|{video_url}"}
+                            ]
+                        ]
+                    }
+                }
             ]
         }
         
@@ -51,7 +58,6 @@ def download_and_send_video(chat_id, resolution, video_url):
     }
     
     try:
-        # Уведомляем о начале скачивания
         params = {"user_id": chat_id}
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
         
@@ -64,7 +70,6 @@ def download_and_send_video(chat_id, resolution, video_url):
             
             requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"📤 Отправляю файл ({file_size:.1f} МБ)..."}, verify=False, timeout=15)
             
-            # Отправка самого видеофайла в чат
             with open(filename, 'rb') as f:
                 files = {'file': f}
                 res = requests.post(
@@ -85,7 +90,7 @@ def download_and_send_video(chat_id, resolution, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот с выбором качества запущен...")
+    print("Бот с поддержкой инлайн-кнопок MAX запущен...")
     current_marker = None
 
     while True:
@@ -108,8 +113,8 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # Проверяем нажатие на кнопку (callback_query)
-                    callback = update.get("callback_query")
+                    # Обработка нажатий на инлайн-кнопки
+                    callback = update.get("callback_query") or update.get("callback")
                     if callback:
                         chat_id = callback.get("from", {}).get("id") or callback.get("chat_id")
                         data_payload = callback.get("data", "")
@@ -118,7 +123,7 @@ def main():
                             download_and_send_video(chat_id, int(res_str), video_url)
                         continue
 
-                    # Проверяем обычное текстовое сообщение со ссылкой
+                    # Обработка обычного сообщения со ссылкой
                     message = update.get("message", {})
                     chat_id = (
                         message.get("chat_id") or
