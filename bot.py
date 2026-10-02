@@ -17,14 +17,14 @@ HEADERS = {
 
 def send_text(chat_id, text):
     try:
-        # Передаем и recipient, и chat_id на случай разных версий API платформы
+        # Передаем и chat_id, и user_id, чтобы API точно приняло получателя
         data = {
-            "recipient": {"chat_id": chat_id} if isinstance(chat_id, (int, str)) and str(chat_id).isdigit() else chat_id,
             "chat_id": chat_id,
+            "user_id": chat_id,
             "text": text
         }
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера на текст (id={chat_id}): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -58,7 +58,7 @@ def process_smart_video(chat_id, video_url):
                     files = {'file': f}
                     data = {
                         'chat_id': chat_id,
-                        'recipient': chat_id
+                        'user_id': chat_id
                     }
                     res = requests.post(
                         f"{BASE_URL}/messages", 
@@ -82,7 +82,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен с обновленной структурой адресата...")
+    print("Бот запущен с поддержкой user_id...")
     current_marker = None
 
     while True:
@@ -107,13 +107,13 @@ def main():
                 for update in data.get("updates", []):
                     message = update.get("message", {})
                     
-                    # Ищем chat_id по всем возможным путям
+                    # Ищем ID получателя везде, включая sender и user_id
                     chat_id = (
                         message.get("chat_id") or
-                        message.get("recipient", {}).get("chat_id") or
                         message.get("sender", {}).get("user_id") or
                         message.get("from", {}).get("id") or
-                        message.get("chat", {}).get("id")
+                        message.get("chat", {}).get("id") or
+                        message.get("recipient", {}).get("chat_id")
                     )
                     
                     body = message.get("body", {})
@@ -131,3 +131,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
