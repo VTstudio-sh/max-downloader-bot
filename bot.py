@@ -17,14 +17,27 @@ HEADERS = {
 
 def send_text(chat_id, text):
     try:
-        # Передаем и chat_id, и user_id, чтобы API точно приняло получателя
+        # Платформа требует структуру recipient: {chat_id: ...} или user_id
         data = {
-            "chat_id": chat_id,
-            "user_id": chat_id,
+            "recipient": {
+                "chat_id": chat_id
+            },
             "text": text
         }
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
         print(f"Ответ сервера на текст (id={chat_id}): статус {res.status_code}, тело: {res.text}")
+        
+        # Если первый вариант не прошел, пробуем альтернативный формат с user_id в recipient
+        if res.status_code != 200:
+            data_alt = {
+                "recipient": {
+                    "user_id": chat_id
+                },
+                "text": text
+            }
+            res_alt = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data_alt, verify=False, timeout=15)
+            print(f"Альтернативный ответ (user_id): статус {res_alt.status_code}, тело: {res_alt.text}")
+            
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -57,8 +70,7 @@ def process_smart_video(chat_id, video_url):
                 with open(filename, 'rb') as f:
                     files = {'file': f}
                     data = {
-                        'chat_id': chat_id,
-                        'user_id': chat_id
+                        'recipient': json.dumps({"chat_id": chat_id})
                     }
                     res = requests.post(
                         f"{BASE_URL}/messages", 
@@ -82,7 +94,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен с поддержкой user_id...")
+    print("Бот запущен с правильной структурой recipient...")
     current_marker = None
 
     while True:
@@ -107,7 +119,6 @@ def main():
                 for update in data.get("updates", []):
                     message = update.get("message", {})
                     
-                    # Ищем ID получателя везде, включая sender и user_id
                     chat_id = (
                         message.get("chat_id") or
                         message.get("sender", {}).get("user_id") or
