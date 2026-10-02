@@ -14,67 +14,78 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def send_message_with_button(chat_id, text, button_text, button_url):
+def send_message_with_qualities(chat_id, video_url):
+    """Отправляет сообщение с кнопками выбора качества видео"""
     try:
         params = {"user_id": chat_id}
         
-        # Пробуем стандартный формат инлайн-кнопок для платформ такого типа
+        # Структура кнопок выбора качества (как в том боте)
         data = {
-            "text": text,
+            "text": f"Выберите качество:\n{video_url}",
             "inline_keyboard": [
                 [
-                    {
-                        "text": button_text,
-                        "url": button_url
-                    }
+                    {"text": "1080p", "callback_data": f"1080|{video_url}"},
+                    {"text": "720p", "callback_data": f"720|{video_url}"}
+                ],
+                [
+                    {"text": "480p", "callback_data": f"480|{video_url}"},
+                    {"text": "360p", "callback_data": f"360|{video_url}"}
                 ]
             ]
         }
         
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера с кнопкой (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
-        
-        # Если API выдаст ошибку из-за формата клавиатуры, отправим хотя бы текст со ссылкой резервом
-        if res.status_code != 200:
-            data_fallback = {"text": f"{text}\n\n🔗 {button_url}"}
-            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data_fallback, verify=False, timeout=15)
-            
+        print(f"Ответ меню качества: статус {res.status_code}, тело: {res.text}")
     except Exception as e:
-        print(f"Ошибка отправки сообщения с кнопкой: {e}")
+        print(f"Ошибка отправки меню качества: {e}")
 
-def process_smart_video(chat_id, video_url):
-    ydl_opts_optimal = {
-        'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+def download_and_send_video(chat_id, resolution, video_url):
+    """Скачивает видео нужного качества и отправляет файл в чат"""
+    filename = f"video_{chat_id}.mp4"
+    
+    ydl_opts = {
+        'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
+        'outtmpl': filename,
         'quiet': True,
         'no_check_certificate': True,
     }
     
     try:
-        # Отправляем текстовый статус
+        # Уведомляем о начале скачивания
         params = {"user_id": chat_id}
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": "⚡ Получаю прямую ссылку на файл..."}, verify=False, timeout=15)
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
         
-        with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            direct_url = info.get('url')
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
             
-        if direct_url:
-            # Отправляем сообщение с красивой инлайн-кнопкой
-            send_message_with_button(
-                chat_id, 
-                "✅ Видео успешно обработано! Нажмите на кнопку ниже, чтобы скачать файл:", 
-                "📥 Скачать видео", 
-                direct_url
-            )
-        else:
-            send_message_with_button(chat_id, "❌ Не удалось получить прямую ссылку на видео.", "Открыть оригинал", video_url)
+        if os.path.exists(filename):
+            file_size = os.path.getsize(filename) / (1024 * 1024)
+            print(f"Видео скачано. Размер: {file_size:.2f} МБ")
+            
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"📤 Отправляю файл ({file_size:.1f} МБ)..."}, verify=False, timeout=15)
+            
+            # Отправка самого видеофайла в чат
+            with open(filename, 'rb') as f:
+                files = {'file': f}
+                res = requests.post(
+                    f"{BASE_URL}/messages", 
+                    headers={"Authorization": TOKEN}, 
+                    params=params,
+                    files=files, 
+                    verify=False,
+                    timeout=180
+                )
+                print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
                 
     except Exception as e:
-        print(f"Ошибка обработки: {e}")
-        send_message_with_button(chat_id, f"❌ Произошла ошибка при обработке ссылки: {e}", "Повторить", video_url)
+        print(f"Ошибка скачивания/отправки: {e}")
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params={"user_id": chat_id}, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
 
 def main():
-    print("Бот запущен и настроен на выдачу кнопок...")
+    print("Бот с выбором качества запущен...")
     current_marker = None
 
     while True:
@@ -97,14 +108,23 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
+                    # Проверяем нажатие на кнопку (callback_query)
+                    callback = update.get("callback_query")
+                    if callback:
+                        chat_id = callback.get("from", {}).get("id") or callback.get("chat_id")
+                        data_payload = callback.get("data", "")
+                        if "|" in data_payload:
+                            res_str, video_url = data_payload.split("|", 1)
+                            download_and_send_video(chat_id, int(res_str), video_url)
+                        continue
+
+                    # Проверяем обычное текстовое сообщение со ссылкой
                     message = update.get("message", {})
-                    
                     chat_id = (
                         message.get("chat_id") or
                         message.get("sender", {}).get("user_id") or
                         message.get("from", {}).get("id") or
-                        message.get("chat", {}).get("id") or
-                        message.get("recipient", {}).get("chat_id")
+                        message.get("chat", {}).get("id")
                     )
                     
                     body = message.get("body", {})
@@ -113,12 +133,13 @@ def main():
                     if chat_id and text and "http" in text:
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
-                        process_smart_video(chat_id, url)
+                        send_message_with_qualities(chat_id, url)
             else:
                 time.sleep(5)
         except Exception as e:
-            print(f"Ошибка в цикле: {e}")
+            print(f"Ошибка в общем цикле: {e}")
             time.sleep(5)
 
 if __name__ == '__main__':
     main()
+
