@@ -42,7 +42,7 @@ def process_smart_video(chat_id, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Размер файла: {file_size:.2f} МБ")
             
-            # Ставим реальный рабочий лимит платформы для прямой отправки (30 МБ)
+            # Лимит прямой отправки в чат (30 МБ во избежание ошибки 413)
             CHAT_LIMIT_MB = 30 
             
             if file_size <= CHAT_LIMIT_MB:
@@ -63,7 +63,7 @@ def process_smart_video(chat_id, video_url):
                     if res.status_code != 200:
                         send_text(chat_id, f"❌ Ошибка отправки (код {res.status_code}). Сервер отклонил файл.")
             else:
-                # Если файл тяжелее 30 МБ, сервер выдает 413 ошибку, поэтому предупреждаем пользователя
+                # Если файл тяжелее 30 МБ, даем ссылку, чтобы не было ошибки 413
                 send_text(chat_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита прямой отправки в чат (30 МБ).\n\n🔗 Оригинальная ссылка на видео: {video_url}")
                 
     except Exception as e:
@@ -114,5 +114,5 @@ def main():
             print(f"Ошибка в цикле: {e}")
             time.sleep(5)
 
-if __name__ ==^{\prime}__main__^{\prime}:
+if __name__ == '__main__':
     main()
