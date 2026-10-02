@@ -24,7 +24,6 @@ def send_text(chat_id, text):
 def process_smart_video(chat_id, video_url):
     filename = f"video_{chat_id}.mp4"
     
-    # Сначала пробуем скачать в хорошем оптимальном качестве (быстро, для чата)
     ydl_opts_optimal = {
         'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
         'outtmpl': filename,
@@ -43,12 +42,11 @@ def process_smart_video(chat_id, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Размер файла: {file_size:.2f} МБ")
             
-            # Лимит платформы для отправки файлом в чат (например, 500 МБ для надежности, либо до 4000 МБ)
             CHAT_LIMIT_MB = 500 
             
             if file_size <= CHAT_LIMIT_MB:
-                # Обычное видео — отправляем в чат с кнопкой Play
-                send_text(chat_id, f"📤 Отправляю видео в оптимальном качестве ({file_size:.1f} МБ)...")
+                send_text(chat_id, f"📤 Отправляю видео в чат ({file_size:.1f} МБ)...")
+                
                 with open(filename, 'rb') as f:
                     files = {'file': f}
                     data = {'chat_id': chat_id}
@@ -60,11 +58,11 @@ def process_smart_video(chat_id, video_url):
                         verify=False,
                         timeout=180
                     )
+                    print(f"Статус отправки файла: {res.status_code}")
                     if res.status_code != 200:
-                        send_text(chat_id, "Не удалось отправить файл в чат, передаю текстовую версию.")
+                        send_text(chat_id, f"Ошибка отправки файла в чат (код {res.status_code})")
             else:
-                # Если файл огромный, перекачиваем в самом лучшем качестве и отдаем ссылкой
-                send_text(chat_id, f"🌟 Видео очень тяжелое ({file_size:.1f} МБ). Перевожу в максимальное качество для отправки по ссылке...")
+                send_text(chat_id, f"🌟 Видео слишком тяжелое ({file_size:.1f} МБ).")
                 
     except Exception as e:
         print(f"Ошибка: {e}")
