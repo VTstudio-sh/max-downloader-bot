@@ -14,14 +14,33 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def send_text(chat_id, text):
+def send_message_with_button(chat_id, text, button_text, button_url):
     try:
         params = {"user_id": chat_id}
-        data = {"text": text}
+        
+        # Пробуем стандартный формат инлайн-кнопок для платформ такого типа
+        data = {
+            "text": text,
+            "inline_keyboard": [
+                [
+                    {
+                        "text": button_text,
+                        "url": button_url
+                    }
+                ]
+            ]
+        }
+        
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера с кнопкой (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
+        
+        # Если API выдаст ошибку из-за формата клавиатуры, отправим хотя бы текст со ссылкой резервом
+        if res.status_code != 200:
+            data_fallback = {"text": f"{text}\n\n🔗 {button_url}"}
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data_fallback, verify=False, timeout=15)
+            
     except Exception as e:
-        print(f"Ошибка отправки текста: {e}")
+        print(f"Ошибка отправки сообщения с кнопкой: {e}")
 
 def process_smart_video(chat_id, video_url):
     ydl_opts_optimal = {
@@ -31,25 +50,31 @@ def process_smart_video(chat_id, video_url):
     }
     
     try:
-        send_text(chat_id, "⚡ Получаю прямую ссылку на файл...")
+        # Отправляем текстовый статус
+        params = {"user_id": chat_id}
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": "⚡ Получаю прямую ссылку на файл..."}, verify=False, timeout=15)
         
-        # Достаем прямую ссылку на медиапоток без скачивания на сервер
         with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
             info = ydl.extract_info(video_url, download=False)
             direct_url = info.get('url')
             
         if direct_url:
-            # Отправляем ту самую прямую ссылку, по которой файл сразу скачивается
-            send_text(chat_id, f"📥 Прямая ссылка для скачивания файла:\n\n{direct_url}")
+            # Отправляем сообщение с красивой инлайн-кнопкой
+            send_message_with_button(
+                chat_id, 
+                "✅ Видео успешно обработано! Нажмите на кнопку ниже, чтобы скачать файл:", 
+                "📥 Скачать видео", 
+                direct_url
+            )
         else:
-            send_text(chat_id, "❌ Не удалось получить прямую ссылку на видео.")
+            send_message_with_button(chat_id, "❌ Не удалось получить прямую ссылку на видео.", "Открыть оригинал", video_url)
                 
     except Exception as e:
         print(f"Ошибка обработки: {e}")
-        send_text(chat_id, f"❌ Произошла ошибка при обработке ссылки: {e}")
+        send_message_with_button(chat_id, f"❌ Произошла ошибка при обработке ссылки: {e}", "Повторить", video_url)
 
 def main():
-    print("Бот запущен и настроен на выдачу прямых ссылок для скачивания...")
+    print("Бот запущен и настроен на выдачу кнопок...")
     current_marker = None
 
     while True:
