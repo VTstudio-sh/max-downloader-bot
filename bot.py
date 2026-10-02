@@ -1,21 +1,22 @@
 import os
+import time
 import requests
 import urllib3
+import yt_dlp
+import json
 
-# Отключаем предупреждения о несекурных SSL-запросах (если применимо)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-TOKEN = os.getenv("TOKEN")  # Токен берется из переменных окружения Railway
-BASE_URL = "https://platform.max.ru/api/v1"  # Базовый URL платформы (замени на актуальный, если отличается)
+TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
+BASE_URL = "https://platform-api2.max.ru"
 
 HEADERS = {
-    "Authorization": f"Bearer {TOKEN}",
+    "Authorization": TOKEN,
     "Content-Type": "application/json"
 }
 
 def send_text(recipient_id, text):
     try:
-        # Передаем идентификатор через user_id в объекте recipient
         data = {
             "recipient": {
                 "user_id": str(recipient_id)
@@ -27,43 +28,102 @@ def send_text(recipient_id, text):
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
-def main():
-    print("Бот запущен и готов к работе...")
+def process_smart_video(recipient_id, video_url):
+    filename = f"video_{recipient_id}.mp4"
     
-    # Пример структуры опроса обновлений (Long Polling / Webhook endpoint логика)
-    # Здесь используется твоя базовая логика получения событий от сервера
-    offset = 0
+    ydl_opts_optimal = {
+        'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
+        'outtmpl': filename,
+        'quiet': True,
+        'no_check_certificate': True,
+        'concurrent_fragment_downloads': 4,
+    }
+    
+    try:
+        send_text(recipient_id, "⚡ Анализирую и скачиваю видео...")
+        
+        with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
+            ydl.download([video_url])
+            
+        if os.path.exists(filename):
+            file_size = os.path.getsize(filename) / (1024 * 1024)
+            print(f"Размер файла: {file_size:.2f} МБ")
+            
+            CHAT_LIMIT_MB = 30 
+            
+            if file_size <= CHAT_LIMIT_MB:
+                send_text(recipient_id, f"📤 Отправляю видео в чат ({file_size:.1f} МБ)...")
+                
+                with open(filename, 'rb') as f:
+                    files = {'file': f}
+                    data = {
+                        'recipient': json.dumps({"user_id": str(recipient_id)})
+                    }
+                    res = requests.post(
+                        f"{BASE_URL}/messages", 
+                        headers={"Authorization": TOKEN}, 
+                        data=data, 
+                        files=files, 
+                        verify=False,
+                        timeout=180
+                    )
+                    print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
+                    if res.status_code != 200:
+                        send_text(recipient_id, f"❌ Ошибка отправки файла (код {res.status_code}).")
+            else:
+                send_text(recipient_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита прямой отправки в чат (30 МБ).\n\n🔗 Оригинальная ссылка на видео: {video_url}")
+                
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        send_text(recipient_id, f"❌ Произошла ошибка: {e}")
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
+
+def main():
+    print("Бот запущен с полной логикой и правильным user_id...")
+    current_marker = None
+
     while True:
         try:
-            # Запрос обновлений (убедись, что эндпоинт получения апдейтов совпадает с документацией платформы)
-            response = requests.get(f"{BASE_URL}/updates", headers=HEADERS, params={"offset": offset}, verify=False, timeout=30)
+            params = {'timeout': 30}
+            if current_marker:
+                params['marker'] = current_marker
+                
+            response = requests.get(
+                f"{BASE_URL}/updates", 
+                headers=HEADERS, 
+                params=params,
+                verify=False,
+                timeout=45
+            )
             
             if response.status_code == 200:
-                updates = response.json().get("updates", [])
-                for update in updates:
-                    offset = update.get("update_id", offset) + 1
-                    
+                data = response.json()
+                if "marker" in data:
+                    current_marker = data["marker"]
+                
+                for update in data.get("updates", []):
                     message = update.get("message", {})
-                    if not message:
-                        continue
-                        
-                    # Надежно извлекаем ID пользователя или чата для ответа
+                    
                     recipient_id = (
                         message.get("sender", {}).get("user_id") or
                         message.get("chat", {}).get("chat_id") or
                         message.get("chat_id")
                     )
                     
-                    text_body = message.get("text", "")
-                    print(f"Получено сообщение от {recipient_id}: {text_body}")
+                    body = message.get("body", {})
+                    text = body.get("text") or message.get("text", "")
                     
-                    # Эхо-ответ или твоя бизнес-логика
-                    if text_body:
-                        send_text(recipient_id, f"Привет! Я получил твое сообщение: {text_body}")
-                        
+                    if recipient_id and text and "http" in text:
+                        words = text.split()
+                        url = next((w for w in words if w.startswith("http")), text)
+                        process_smart_video(recipient_id, url)
+            else:
+                time.sleep(5)
         except Exception as e:
-            print(f"Ошибка в цикле получения обновлений: {e}")
+            print(f"Ошибка в цикле: {e}")
+            time.sleep(5)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
