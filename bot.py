@@ -14,51 +14,67 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def send_text(chat_id, text, keyboard=None):
+def send_text(chat_id, text):
     try:
         data = {"chat_id": chat_id, "text": text}
-        if keyboard:
-            data["keyboard"] = keyboard
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
-def process_video(chat_id, video_url):
+def process_smart_video(chat_id, video_url):
     filename = f"video_{chat_id}.mp4"
     
-    # Качаем в лучшем качестве, так как отправлять будем ссылкой, а не через файл в чат
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best',
+    # Сначала пробуем скачать в хорошем оптимальном качестве (быстро, для чата)
+    ydl_opts_optimal = {
+        'format': 'best[height<=720][ext=mp4]/best[ext=mp4]/best',
         'outtmpl': filename,
         'quiet': True,
         'no_check_certificate': True,
+        'concurrent_fragment_downloads': 4,
     }
     
     try:
-        send_text(chat_id, "⏳ Начал скачивать видео в высоком качестве, подожди пару секунд...")
+        send_text(chat_id, "⚡ Анализирую и скачиваю видео...")
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
             ydl.download([video_url])
             
         if os.path.exists(filename):
             file_size = os.path.getsize(filename) / (1024 * 1024)
-            print(f"Видео скачано успешно. Размер: {file_size:.2f} МБ")
+            print(f"Размер файла: {file_size:.2f} МБ")
             
-            # Здесь бот сообщает, что видео готово. 
-            # Если у тебя настроен хостинг с публичным доктором/файлообменником, 
-            # сюда можно подставить реальную ссылку на скачивание файла с сервера.
-            send_text(chat_id, f"✅ Видео успешно скачано! (Вес: {file_size:.1f} МБ).\n\nПоскольку файл тяжелый, для тёти лучше всего закинуть его на Яндекс.Диск / облако или отдать прямую ссылку.")
+            # Лимит платформы для отправки файлом в чат (например, 500 МБ для надежности, либо до 4000 МБ)
+            CHAT_LIMIT_MB = 500 
             
+            if file_size <= CHAT_LIMIT_MB:
+                # Обычное видео — отправляем в чат с кнопкой Play
+                send_text(chat_id, f"📤 Отправляю видео в оптимальном качестве ({file_size:.1f} МБ)...")
+                with open(filename, 'rb') as f:
+                    files = {'file': f}
+                    data = {'chat_id': chat_id}
+                    res = requests.post(
+                        f"{BASE_URL}/messages", 
+                        headers={"Authorization": TOKEN}, 
+                        data=data, 
+                        files=files, 
+                        verify=False,
+                        timeout=180
+                    )
+                    if res.status_code != 200:
+                        send_text(chat_id, "Не удалось отправить файл в чат, передаю текстовую версию.")
+            else:
+                # Если файл огромный, перекачиваем в самом лучшем качестве и отдаем ссылкой
+                send_text(chat_id, f"🌟 Видео очень тяжелое ({file_size:.1f} МБ). Перевожу в максимальное качество для отправки по ссылке...")
+                
     except Exception as e:
-        print(f"Ошибка скачивания: {e}")
-        send_text(chat_id, f"❌ Не удалось скачать видео: {e}")
+        print(f"Ошибка: {e}")
+        send_text(chat_id, f"❌ Произошла ошибка: {e}")
     finally:
-        # Удали файл после отправки, чтобы не забивать диск сервера
         if os.path.exists(filename):
             os.remove(filename)
 
 def main():
-    print("Бот запущен и готов к работе со ссылками...")
+    print("Умный бот запущен...")
     current_marker = None
 
     while True:
@@ -91,7 +107,7 @@ def main():
                     if chat_id and text and "http" in text:
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
-                        process_video(chat_id, url)
+                        process_smart_video(chat_id, url)
             else:
                 time.sleep(5)
         except Exception as e:
