@@ -17,7 +17,8 @@ HEADERS = {
 def send_text(chat_id, text):
     try:
         data = {"chat_id": chat_id, "text": text}
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
+        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
+        print(f"Ответ сервера на текст ({text[:20]}...): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -59,11 +60,10 @@ def process_smart_video(chat_id, video_url):
                         verify=False,
                         timeout=180
                     )
-                    print(f"Статус отправки файла: {res.status_code}")
+                    print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
                     if res.status_code != 200:
-                        send_text(chat_id, f"❌ Ошибка отправки (код {res.status_code}). Сервер отклонил файл.")
+                        send_text(chat_id, f"❌ Ошибка отправки (код {res.status_code}).")
             else:
-                # Если файл тяжелее 30 МБ, даем ссылку, чтобы не было ошибки 413
                 send_text(chat_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита прямой отправки в чат (30 МБ).\n\n🔗 Оригинальная ссылка на видео: {video_url}")
                 
     except Exception as e:
@@ -74,7 +74,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Умный бот запущен с защитой от ошибки 413...")
+    print("Умный бот запущен с отладкой отправки...")
     current_marker = None
 
     while True:
@@ -104,6 +104,8 @@ def main():
                     body = message.get("body", {})
                     text = body.get("text") or message.get("text", "")
                     
+                    print(f"Получено сообщение из chat_id={chat_id}: {text}")
+                    
                     if chat_id and text and "http" in text:
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
@@ -116,3 +118,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
