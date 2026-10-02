@@ -17,7 +17,12 @@ HEADERS = {
 
 def send_text(chat_id, text):
     try:
-        data = {"chat_id": chat_id, "text": text}
+        # Передаем и recipient, и chat_id на случай разных версий API платформы
+        data = {
+            "recipient": {"chat_id": chat_id} if isinstance(chat_id, (int, str)) and str(chat_id).isdigit() else chat_id,
+            "chat_id": chat_id,
+            "text": text
+        }
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
         print(f"Ответ сервера на текст (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
@@ -51,7 +56,10 @@ def process_smart_video(chat_id, video_url):
                 
                 with open(filename, 'rb') as f:
                     files = {'file': f}
-                    data = {'chat_id': chat_id}
+                    data = {
+                        'chat_id': chat_id,
+                        'recipient': chat_id
+                    }
                     res = requests.post(
                         f"{BASE_URL}/messages", 
                         headers={"Authorization": TOKEN}, 
@@ -74,7 +82,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен в режиме отладки структуры сообщения...")
+    print("Бот запущен с обновленной структурой адресата...")
     current_marker = None
 
     while True:
@@ -97,12 +105,9 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # Выводим весь JSON входящего сообщения в консоль Railway, чтобы увидеть структуру
-                    print("ВХОДЯЩИЙ UPDATE:", json.dumps(update, ensure_ascii=False))
-                    
                     message = update.get("message", {})
                     
-                    # Пробуем вытащить chat_id из возможных полей
+                    # Ищем chat_id по всем возможным путям
                     chat_id = (
                         message.get("chat_id") or
                         message.get("recipient", {}).get("chat_id") or
