@@ -17,14 +17,15 @@ HEADERS = {
 
 def send_text(recipient_id, text):
     try:
+        # Используем chat_id в объекте recipient
         data = {
             "recipient": {
-                "user_id": str(recipient_id)
+                "chat_id": str(recipient_id)
             },
             "text": text
         }
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст (recipient_id={recipient_id}): статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера на текст (chat_id={recipient_id}): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -57,7 +58,7 @@ def process_smart_video(recipient_id, video_url):
                 with open(filename, 'rb') as f:
                     files = {'file': f}
                     data = {
-                        'recipient': json.dumps({"user_id": str(recipient_id)})
+                        'recipient': json.dumps({"chat_id": str(recipient_id)})
                     }
                     res = requests.post(
                         f"{BASE_URL}/messages", 
@@ -81,7 +82,7 @@ def process_smart_video(recipient_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен с полной логикой и правильным user_id...")
+    print("Бот запущен с исправленным chat_id в recipient...")
     current_marker = None
 
     while True:
@@ -107,9 +108,9 @@ def main():
                     message = update.get("message", {})
                     
                     recipient_id = (
-                        message.get("sender", {}).get("user_id") or
                         message.get("chat", {}).get("chat_id") or
-                        message.get("chat_id")
+                        message.get("chat_id") or
+                        message.get("sender", {}).get("user_id")
                     )
                     
                     body = message.get("body", {})
@@ -127,3 +128,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
