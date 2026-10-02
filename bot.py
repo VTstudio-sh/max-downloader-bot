@@ -18,7 +18,7 @@ def send_text(chat_id, text):
     try:
         data = {"chat_id": chat_id, "text": text}
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст ({text[:20]}...): статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера на текст: статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -43,7 +43,7 @@ def process_smart_video(chat_id, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Размер файла: {file_size:.2f} МБ")
             
-            # Лимит прямой отправки в чат (30 МБ во избежание ошибки 413)
+            # Из-за лимита 413 ставим порог 30 МБ для прямой отправки
             CHAT_LIMIT_MB = 30 
             
             if file_size <= CHAT_LIMIT_MB:
@@ -62,7 +62,7 @@ def process_smart_video(chat_id, video_url):
                     )
                     print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
                     if res.status_code != 200:
-                        send_text(chat_id, f"❌ Ошибка отправки (код {res.status_code}).")
+                        send_text(chat_id, f"❌ Ошибка отправки файла (код {res.status_code}).")
             else:
                 send_text(chat_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита прямой отправки в чат (30 МБ).\n\n🔗 Оригинальная ссылка на видео: {video_url}")
                 
@@ -74,7 +74,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Умный бот запущен с отладкой отправки...")
+    print("Умный бот запущен с исправленным поиском chat_id...")
     current_marker = None
 
     while True:
@@ -98,13 +98,19 @@ def main():
                 
                 for update in data.get("updates", []):
                     message = update.get("message", {})
-                    recipient = message.get("recipient", {})
-                    chat_id = recipient.get("chat_id") or message.get("chat_id")
+                    
+                    # Универсальный поиск chat_id в разных частях структуры сообщения
+                    chat_id = (
+                        message.get("chat_id") or
+                        message.get("recipient", {}).get("chat_id") or
+                        message.get("sender", {}).get("user_id") or
+                        message.get("from", {}).get("id")
+                    )
                     
                     body = message.get("body", {})
                     text = body.get("text") or message.get("text", "")
                     
-                    print(f"Получено сообщение из chat_id={chat_id}: {text}")
+                    print(f"Получено сообщение. Найден chat_id={chat_id}, текст: {text}")
                     
                     if chat_id and text and "http" in text:
                         words = text.split()
@@ -118,4 +124,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
