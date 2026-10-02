@@ -16,18 +16,10 @@ HEADERS = {
 
 def send_text(chat_id, text):
     try:
-        # Передаем id получателя через URL-параметры, как в том успешном варианте
-        params = {"chat_id": chat_id}
+        params = {"user_id": chat_id}
         data = {"text": text}
-        
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
         print(f"Ответ сервера на текст (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
-        
-        if res.status_code != 200:
-            params_alt = {"user_id": chat_id}
-            res_alt = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params_alt, json=data, verify=False, timeout=15)
-            print(f"Альтернативный ответ (user_id в URL): статус {res_alt.status_code}, тело: {res_alt.text}")
-            
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -43,7 +35,8 @@ def process_smart_video(chat_id, video_url):
     }
     
     try:
-        # Скачиваем видео для проверки
+        send_text(chat_id, "⚡ Скачиваю видео...")
+        
         with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
             ydl.download([video_url])
             
@@ -51,8 +44,28 @@ def process_smart_video(chat_id, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Видео успешно обработано. Размер: {file_size:.2f} МБ")
             
-            # Сразу отправляем чистую оригинальную ссылку в чат
-            send_text(chat_id, f"🔗 Ссылка на видео: {video_url}")
+            CHAT_LIMIT_MB = 30 
+            
+            if file_size <= CHAT_LIMIT_MB:
+                send_text(chat_id, f"📤 Отправляю видео в чат ({file_size:.1f} МБ)...")
+                
+                # Отправляем сам файл через multipart/form-data
+                with open(filename, 'rb') as f:
+                    files = {'file': f}
+                    params = {'user_id': chat_id}
+                    res = requests.post(
+                        f"{BASE_URL}/messages", 
+                        headers={"Authorization": TOKEN}, 
+                        params=params,
+                        files=files, 
+                        verify=False,
+                        timeout=180
+                    )
+                    print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
+                    if res.status_code != 200:
+                        send_text(chat_id, f"❌ Ошибка отправки файла (код {res.status_code}).")
+            else:
+                send_text(chat_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита чата (30 МБ).\n\n🔗 Оригинальная ссылка: {video_url}")
                 
     except Exception as e:
         print(f"Ошибка обработки: {e}")
@@ -62,7 +75,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен и настроен на отправку ссылок...")
+    print("Бот запущен и настроен на отправку файлов...")
     current_marker = None
 
     while True:
@@ -110,3 +123,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
