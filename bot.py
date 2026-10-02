@@ -17,26 +17,18 @@ HEADERS = {
 
 def send_text(chat_id, text):
     try:
-        # Платформа требует структуру recipient: {chat_id: ...} или user_id
-        data = {
-            "recipient": {
-                "chat_id": chat_id
-            },
-            "text": text
-        }
-        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст (id={chat_id}): статус {res.status_code}, тело: {res.text}")
+        # Передаем id получателя через query-параметры URL, а в теле оставляем только text
+        params = {"chat_id": chat_id}
+        data = {"text": text}
         
-        # Если первый вариант не прошел, пробуем альтернативный формат с user_id в recipient
+        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
+        print(f"Ответ сервера на текст (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
+        
+        # Если не прошло, пробуем с параметром user_id
         if res.status_code != 200:
-            data_alt = {
-                "recipient": {
-                    "user_id": chat_id
-                },
-                "text": text
-            }
-            res_alt = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data_alt, verify=False, timeout=15)
-            print(f"Альтернативный ответ (user_id): статус {res_alt.status_code}, тело: {res_alt.text}")
+            params_alt = {"user_id": chat_id}
+            res_alt = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params_alt, json=data, verify=False, timeout=15)
+            print(f"Альтернативный ответ (user_id в URL): статус {res_alt.status_code}, тело: {res_alt.text}")
             
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
@@ -69,13 +61,11 @@ def process_smart_video(chat_id, video_url):
                 
                 with open(filename, 'rb') as f:
                     files = {'file': f}
-                    data = {
-                        'recipient': json.dumps({"chat_id": chat_id})
-                    }
+                    params = {'chat_id': chat_id}
                     res = requests.post(
                         f"{BASE_URL}/messages", 
                         headers={"Authorization": TOKEN}, 
-                        data=data, 
+                        params=params,
                         files=files, 
                         verify=False,
                         timeout=180
@@ -94,7 +84,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен с правильной структурой recipient...")
+    print("Бот запущен с передачей ID в параметрах URL...")
     current_marker = None
 
     while True:
