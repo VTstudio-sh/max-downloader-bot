@@ -3,7 +3,6 @@ import time
 import requests
 import urllib3
 import yt_dlp
-import json
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -17,7 +16,6 @@ HEADERS = {
 
 def send_text(recipient_id, text):
     try:
-        # Используем chat_id в объекте recipient
         data = {
             "recipient": {
                 "chat_id": str(recipient_id)
@@ -25,7 +23,7 @@ def send_text(recipient_id, text):
             "text": text
         }
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст (chat_id={recipient_id}): статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера (chat_id={recipient_id}): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -41,48 +39,26 @@ def process_smart_video(recipient_id, video_url):
     }
     
     try:
-        send_text(recipient_id, "⚡ Анализирую и скачиваю видео...")
-        
+        # Скачиваем видео для проверки
         with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
             ydl.download([video_url])
             
         if os.path.exists(filename):
             file_size = os.path.getsize(filename) / (1024 * 1024)
-            print(f"Размер файла: {file_size:.2f} МБ")
+            print(f"Видео успешно обработано. Размер: {file_size:.2f} МБ")
             
-            CHAT_LIMIT_MB = 30 
-            
-            if file_size <= CHAT_LIMIT_MB:
-                send_text(recipient_id, f"📤 Отправляю видео в чат ({file_size:.1f} МБ)...")
-                
-                with open(filename, 'rb') as f:
-                    files = {'file': f}
-                    data = {
-                        'recipient': json.dumps({"chat_id": str(recipient_id)})
-                    }
-                    res = requests.post(
-                        f"{BASE_URL}/messages", 
-                        headers={"Authorization": TOKEN}, 
-                        data=data, 
-                        files=files, 
-                        verify=False,
-                        timeout=180
-                    )
-                    print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
-                    if res.status_code != 200:
-                        send_text(recipient_id, f"❌ Ошибка отправки файла (код {res.status_code}).")
-            else:
-                send_text(recipient_id, f"⚠️ Видео весит {file_size:.1f} МБ. Это больше лимита прямой отправки в чат (30 МБ).\n\n🔗 Оригинальная ссылка на видео: {video_url}")
+            # Отправляем обратно чистую ссылку
+            send_text(recipient_id, f"🔗 Ссылка на видео: {video_url}")
                 
     except Exception as e:
-        print(f"Ошибка: {e}")
-        send_text(recipient_id, f"❌ Произошла ошибка: {e}")
+        print(f"Ошибка обработки: {e}")
+        send_text(recipient_id, f"❌ Ошибка: {e}")
     finally:
         if os.path.exists(filename):
             os.remove(filename)
 
 def main():
-    print("Бот запущен с исправленным chat_id в recipient...")
+    print("Бот запущен и настроен на отправку ссылок...")
     current_marker = None
 
     while True:
@@ -128,4 +104,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
