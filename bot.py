@@ -16,14 +16,13 @@ HEADERS = {
 
 def send_text(recipient_id, text):
     try:
+        # Пробуем передать идентификатор через user_id на верхнем уровне
         data = {
-            "recipient": {
-                "chat_id": str(recipient_id)
-            },
+            "user_id": str(recipient_id),
             "text": text
         }
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера (chat_id={recipient_id}): статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера (user_id={recipient_id}): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -39,7 +38,6 @@ def process_smart_video(recipient_id, video_url):
     }
     
     try:
-        # Скачиваем видео для проверки
         with yt_dlp.YoutubeDL(ydl_opts_optimal) as ydl:
             ydl.download([video_url])
             
@@ -47,7 +45,6 @@ def process_smart_video(recipient_id, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Видео успешно обработано. Размер: {file_size:.2f} МБ")
             
-            # Отправляем обратно чистую ссылку
             send_text(recipient_id, f"🔗 Ссылка на видео: {video_url}")
                 
     except Exception as e:
@@ -58,7 +55,7 @@ def process_smart_video(recipient_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Бот запущен и настроен на отправку ссылок...")
+    print("Бот запущен с исправленным user_id...")
     current_marker = None
 
     while True:
@@ -84,9 +81,9 @@ def main():
                     message = update.get("message", {})
                     
                     recipient_id = (
+                        message.get("sender", {}).get("user_id") or
                         message.get("chat", {}).get("chat_id") or
-                        message.get("chat_id") or
-                        message.get("sender", {}).get("user_id")
+                        message.get("chat_id")
                     )
                     
                     body = message.get("body", {})
@@ -104,3 +101,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
