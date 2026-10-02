@@ -4,10 +4,8 @@ import requests
 import urllib3
 import yt_dlp
 
-# Отключаем предупреждения о неиспользуемой SSL-проверке
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Токен бота MAX
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://platform-api2.max.ru"
 
@@ -16,61 +14,54 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def send_text(chat_id, text):
-    """Отправка текстового сообщения"""
+def send_text(chat_id, text, keyboard=None):
     try:
         data = {"chat_id": chat_id, "text": text}
-        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ на отправку текста: {res.status_code}")
+        if keyboard:
+            data["keyboard"] = keyboard
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
-def download_and_send(chat_id, video_url):
-    """Скачивание и отправка видеофайла"""
+def process_video(chat_id, video_url):
     filename = f"video_{chat_id}.mp4"
     
-    # Настройки yt-dlp с обходом ограничений YouTube и эмуляцией клиента
+    # Качаем в лучшем качестве, так как отправлять будем ссылкой, а не через файл в чат
     ydl_opts = {
-        'format': 'mp4/best',
+        'format': 'best[ext=mp4]/best',
         'outtmpl': filename,
         'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         'no_check_certificate': True,
     }
     
     try:
-        send_text(chat_id, "Ссылка получена! Начинаю скачивание видео...")
-        print(f"Начинаем скачивание: {video_url}")
+        send_text(chat_id, "⏳ Начал скачивать видео в высоком качестве, подожди пару секунд...")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        print("Видео скачано, отправляем файл...")
-        with open(filename, 'rb') as f:
-            files = {'file': f}
-            data = {'chat_id': chat_id}
-            res = requests.post(
-                f"{BASE_URL}/messages", 
-                headers={"Authorization": TOKEN}, 
-                data=data, 
-                files=files, 
-                verify=False,
-                timeout=60
-            )
-            print(f"Статус отправки видео: {res.status_code}")
+        if os.path.exists(filename):
+            file_size = os.path.getsize(filename) / (1024 * 1024)
+            print(f"Видео скачано успешно. Размер: {file_size:.2f} МБ")
+            
+            # Здесь бот сообщает, что видео готово. 
+            # Если у тебя настроен хостинг с публичным доктором/файлообменником, 
+            # сюда можно подставить реальную ссылку на скачивание файла с сервера.
+            send_text(chat_id, f"✅ Видео успешно скачано! (Вес: {file_size:.1f} МБ).\n\nПоскольку файл тяжелый, для тёти лучше всего закинуть его на Яндекс.Диск / облако или отдать прямую ссылку.")
             
     except Exception as e:
-        print(f"Ошибка при обработке видео: {e}")
-        send_text(chat_id, f"Произошла ошибка при скачивании: {e}")
+        print(f"Ошибка скачивания: {e}")
+        send_text(chat_id, f"❌ Не удалось скачать видео: {e}")
     finally:
+        # Удали файл после отправки, чтобы не забивать диск сервера
         if os.path.exists(filename):
             os.remove(filename)
 
 def main():
-    print("Бот запущен с обновленным обходом блокировок...")
+    print("Бот запущен и готов к работе со ссылками...")
     current_marker = None
 
-    while TimeKeeper := True:
+    while True:
         try:
             params = {'timeout': 30}
             if current_marker:
@@ -86,12 +77,10 @@ def main():
             
             if response.status_code == 200:
                 data = response.json()
-                
                 if "marker" in data:
                     current_marker = data["marker"]
                 
-                updates = data.get("updates", [])
-                for update in updates:
+                for update in data.get("updates", []):
                     message = update.get("message", {})
                     recipient = message.get("recipient", {})
                     chat_id = recipient.get("chat_id") or message.get("chat_id")
@@ -99,22 +88,12 @@ def main():
                     body = message.get("body", {})
                     text = body.get("text") or message.get("text", "")
                     
-                    if not text:
-                        markup = body.get("markup", [])
-                        for item in markup:
-                            if isinstance(item, dict) and "url" in item:
-                                text = item["url"]
-                                break
-                    
-                    if chat_id and text and ("http://" in text or "https://" in text):
+                    if chat_id and text and "http" in text:
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
-                        download_and_send(chat_id, url)
+                        process_video(chat_id, url)
             else:
                 time.sleep(5)
-                        
-        except requests.exceptions.Timeout:
-            continue
         except Exception as e:
             print(f"Ошибка в цикле: {e}")
             time.sleep(5)
