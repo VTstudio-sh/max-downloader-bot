@@ -3,6 +3,7 @@ import time
 import requests
 import urllib3
 import yt_dlp
+import json
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -18,7 +19,7 @@ def send_text(chat_id, text):
     try:
         data = {"chat_id": chat_id, "text": text}
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, json=data, verify=False, timeout=15)
-        print(f"Ответ сервера на текст: статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ сервера на текст (chat_id={chat_id}): статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки текста: {e}")
 
@@ -43,7 +44,6 @@ def process_smart_video(chat_id, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Размер файла: {file_size:.2f} МБ")
             
-            # Из-за лимита 413 ставим порог 30 МБ для прямой отправки
             CHAT_LIMIT_MB = 30 
             
             if file_size <= CHAT_LIMIT_MB:
@@ -74,7 +74,7 @@ def process_smart_video(chat_id, video_url):
             os.remove(filename)
 
 def main():
-    print("Умный бот запущен с исправленным поиском chat_id...")
+    print("Бот запущен в режиме отладки структуры сообщения...")
     current_marker = None
 
     while True:
@@ -97,20 +97,22 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
+                    # Выводим весь JSON входящего сообщения в консоль Railway, чтобы увидеть структуру
+                    print("ВХОДЯЩИЙ UPDATE:", json.dumps(update, ensure_ascii=False))
+                    
                     message = update.get("message", {})
                     
-                    # Универсальный поиск chat_id в разных частях структуры сообщения
+                    # Пробуем вытащить chat_id из возможных полей
                     chat_id = (
                         message.get("chat_id") or
                         message.get("recipient", {}).get("chat_id") or
                         message.get("sender", {}).get("user_id") or
-                        message.get("from", {}).get("id")
+                        message.get("from", {}).get("id") or
+                        message.get("chat", {}).get("id")
                     )
                     
                     body = message.get("body", {})
                     text = body.get("text") or message.get("text", "")
-                    
-                    print(f"Получено сообщение. Найден chat_id={chat_id}, текст: {text}")
                     
                     if chat_id and text and "http" in text:
                         words = text.split()
