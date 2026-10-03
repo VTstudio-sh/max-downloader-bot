@@ -15,7 +15,7 @@ HEADERS = {
 }
 
 def send_message_with_qualities(chat_id, video_url):
-    """Отправляет сообщение с кнопками выбора качества через attachments с полем buttons"""
+    """Отправляет сообщение с кнопками выбора качества с правильными полями кнопок"""
     try:
         params = {"user_id": chat_id}
         
@@ -27,12 +27,12 @@ def send_message_with_qualities(chat_id, video_url):
                     "payload": {
                         "buttons": [
                             [
-                                {"text": "1080p", "callback_data": f"1080|{video_url}"},
-                                {"text": "720p", "callback_data": f"720|{video_url}"}
+                                {"type": "callback", "text": "1080p", "payload": f"1080|{video_url}"},
+                                {"type": "callback", "text": "720p", "payload": f"720|{video_url}"}
                             ],
                             [
-                                {"text": "480p", "callback_data": f"480|{video_url}"},
-                                {"text": "360p", "callback_data": f"360|{video_url}"}
+                                {"type": "callback", "text": "480p", "payload": f"480|{video_url}"},
+                                {"type": "callback", "text": "360p", "payload": f"360|{video_url}"}
                             ]
                         ]
                     }
@@ -116,7 +116,8 @@ def main():
                     callback = update.get("callback_query") or update.get("callback")
                     if callback:
                         chat_id = callback.get("from", {}).get("id") or callback.get("chat_id")
-                        data_payload = callback.get("data", "")
+                        # Поддерживаем извлечение payload как из callback, так и из data
+                        data_payload = callback.get("payload") or callback.get("data", "")
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
                             download_and_send_video(chat_id, int(res_str), video_url)
@@ -146,3 +147,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
