@@ -15,12 +15,11 @@ HEADERS = {
 }
 
 def reset_webhook_on_start():
-    """Принудительно очищаем старый вебхук, чтобы работал Long Polling"""
     try:
         res = requests.delete(f"{BASE_URL}/subscriptions", headers=HEADERS, verify=False, timeout=10)
         print(f"Сброс старого вебхука: статус {res.status_code}, ответ: {res.text}")
     except Exception as e:
-        print(f"Не удалось сбросить вебхук (возможно, уже пуст): {e}")
+        print(f"Не удалось сбросить вебхук: {e}")
 
 def send_message_with_qualities(user_id, video_url):
     try:
@@ -62,45 +61,50 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def download_and_send_video(target_params, resolution, video_url):
-    filename = "video_temp.mp4"
+def send_video_by_direct_url(target_params, resolution, video_url):
+    """Получает прямую прямую ссылку на поток нужного качества через yt-dlp и отправляет её мгновенно"""
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
-        'outtmpl': filename,
         'quiet': True,
         'no_check_certificate': True,
     }
     
     try:
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"⚡ Получаю ссылку для {resolution}p..."}, verify=False, timeout=15)
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+            info_dict = ydl.extract_info(video_url, download=False)
+            direct_url = info_dict.get('url')
             
-        if os.path.exists(filename):
-            file_size = os.path.getsize(filename) / (1024 * 1024)
-            print(f"Видео скачано. Размер: {file_size:.2f} МБ")
+        if direct_url:
+            print(f"Прямая ссылка получена: {direct_url[:60]}...")
             
-            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"📤 Отправляю файл ({file_size:.1f} МБ)..."}, verify=False, timeout=15)
+            # Отправляем видео как вложение или ссылкой, которую платформа рендерит сама
+            data = {
+                "text": f"Вот ваше видео в разрешении {resolution}p:",
+                "attachments": [
+                    {
+                        "type": "video",
+                        "payload": {
+                            "url": direct_url
+                        }
+                    }
+                ]
+            }
             
-            with open(filename, 'rb') as f:
-                files = {'file': f}
-                res = requests.post(
-                    f"{BASE_URL}/messages", 
-                    headers={"Authorization": TOKEN}, 
-                    params=target_params,
-                    files=files, 
-                    verify=False,
-                    timeout=180
-                )
-                print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
+            res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data, verify=False, timeout=15)
+            print(f"Статус отправки видео-вложения: {res.status_code}, ответ: {res.text}")
+            
+            if res.status_code != 200:
+                # Резервный вариант, если вложение по ссылке не поддерживается сервером
+                fallback_data = {"text": f"Ссылка на видео ({resolution}p):\n{direct_url}"}
+                requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=fallback_data, verify=False, timeout=15)
+        else:
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": "❌ Не удалось получить прямую ссылку на видео."}, verify=False, timeout=15)
                 
     except Exception as e:
-        print(f"Ошибка скачивания/отправки: {e}")
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
+        print(f"Ошибка обработки ссылки: {e}")
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка: {e}"}, verify=False, timeout=15)
 
 def main():
     print("Бот запущен, сбрасываем старые подписки...")
@@ -129,12 +133,7 @@ def main():
                 
                 updates = data.get("updates", [])
                 for update in updates:
-                    # Выводим вообще весь апдейт в лог, чтобы увидеть, что именно приходит при клике
-                    print(f"Получен апдейт: {update}")
-                    
                     event_type = update.get("type")
-                    
-                    # Ловим callback в разных вариациях структуры
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
                     if event_type == "message_callback" or callback:
@@ -163,10 +162,9 @@ def main():
                         
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(target_params, int(res_str), video_url)
+                            send_video_by_direct_url(target_params, int(res_str), video_url)
                         continue
 
-                    # Обработка текстовых сообщений
                     if event_type == "message_created" or "message" in update:
                         message = update.get("message", update)
                         user_id = (
@@ -183,7 +181,6 @@ def main():
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
             else:
-                print(f"Ошибка получения обновлений: статус {response.status_code}, текст: {response.text}")
                 time.sleep(5)
         except Exception as e:
             print(f"Ошибка в общем цикле: {e}")
@@ -191,3 +188,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
