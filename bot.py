@@ -4,6 +4,7 @@ import requests
 import urllib3
 import yt_dlp
 
+# Отключаем предупреждения об отсутствии SSL-сертификатов (для работы на Railway/хостингах)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
@@ -15,10 +16,9 @@ HEADERS = {
 }
 
 def send_message_with_qualities(user_id, video_url):
-    """Отправляет сообщение с кнопками выбора качества через user_id для лички"""
+    """Отправляет инлайн-кнопки выбора качества"""
     try:
         params = {"user_id": user_id}
-        
         data = {
             "text": f"Выберите качество:\n{video_url}",
             "attachments": [
@@ -39,19 +39,20 @@ def send_message_with_qualities(user_id, video_url):
                 }
             ]
         }
-        
         res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
-        print(f"Ответ меню качества: статус {res.status_code}, тело: {res.text}")
+        print(f"Ответ меню качества: статус {res.status_code}")
     except Exception as e:
         print(f"Ошибка отправки меню качества: {e}")
 
 def answer_callback(callback_id):
-    """Гасим анимацию загрузки (часики) на кнопке через POST /answers"""
+    """Исправлено: Передаем callback_id в params, а не в json!"""
     try:
+        # Для платформы MAX callback_id передается строго в query-параметрах URL
         requests.post(
             f"{BASE_URL}/answers", 
             headers=HEADERS, 
-            json={"callback_id": callback_id}, 
+            params={"callback_id": callback_id}, 
+            json={}, 
             verify=False, 
             timeout=10
         )
@@ -59,8 +60,8 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def download_and_send_video(target_params, resolution, video_url):
-    """Скачивает видео нужного качества и отправляет файл, используя правильные параметры (user_id или chat_id)"""
-    filename = f"video_temp.mp4"
+    """Скачивает видео и отправляет файл в мессенджер MAX"""
+    filename = "video_temp.mp4"
     
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
@@ -70,6 +71,7 @@ def download_and_send_video(target_params, resolution, video_url):
     }
     
     try:
+        # Информируем пользователя
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -81,21 +83,30 @@ def download_and_send_video(target_params, resolution, video_url):
             
             requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"📤 Отправляю файл ({file_size:.1f} МБ)..."}, verify=False, timeout=15)
             
+            # Исправлено: Загрузка файла через multipart/form-data в соответствии со спецификацией MAX API
             with open(filename, 'rb') as f:
-                files = {'file': f}
+                # В заголовках передаем ТОЛЬКО Authorization. Content-Type указывать нельзя, requests сделает его сам!
+                file_headers = {"Authorization": TOKEN}
+                files = {
+                    'file': (filename, f, 'video/mp4')
+                }
+                
                 res = requests.post(
                     f"{BASE_URL}/messages", 
-                    headers={"Authorization": TOKEN}, 
+                    headers=file_headers, 
                     params=target_params,
                     files=files, 
                     verify=False,
-                    timeout=180
+                    timeout=300
                 )
                 print(f"Статус отправки файла: {res.status_code}, ответ: {res.text}")
                 
     except Exception as e:
         print(f"Ошибка скачивания/отправки: {e}")
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
+        try:
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка при обработке: {e}"}, verify=False, timeout=15)
+        except:
+            pass
     finally:
         if os.path.exists(filename):
             os.remove(filename)
@@ -126,23 +137,22 @@ def main():
                 for update in data.get("updates", []):
                     event_type = update.get("type")
                     
-                    # 1. Обработка нажатия на инлайн-кнопку (message_callback)
+                    # 1. Обработка нажатия на инлайн-кнопку
                     if event_type == "message_callback":
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
                         message = update.get("message", {})
                         
-                        # Достаем ID
-                        chat_id = message.get("chat_id")
-                        user_id = callback.get("user", {}).get("user_id")[span_2](start_span)[span_2](end_span)
+                        chat_id = message.get("chat_id", 0)
+                        user_id = callback.get("user", {}).get("user_id")
                         
                         if callback_id:
                             answer_callback(callback_id)
                             
                         print(f"Клик по кнопке! chat_id: {chat_id}, user_id: {user_id}, payload: {data_payload}")
                         
-                        # ЖЕСТКАЯ ПРОВЕРКА: если chat_id равен 0 или пустой, шлем строго через user_id[span_3](start_span)[span_3](end_span)[span_4](start_span)[span_4](end_span)
+                        # Исправлено: жесткое разделение на ЛС (chat_id == 0) и Группы
                         if chat_id is None or chat_id == 0 or chat_id == "0":
                             if user_id:
                                 target_params = {"user_id": int(user_id)}
@@ -156,21 +166,19 @@ def main():
                             download_and_send_video(target_params, int(res_str), video_url)
                         continue
 
-                    # 2. Обработка обычного текстового сообщения
-                    if event_type == "message_created" or "message" in update:
+                    # 2. Обработка обычного текстового сообщения (message_created)
+                    if event_type == "message_created":
                         message = update.get("message", {})
-                        user_id = (
-                            message.get("sender", {}).get("user_id") or
-                            message.get("from", {}).get("id")
-                        )
                         
-                        body = message.get("body", {})
-                        text = body.get("text") or message.get("text", "")
+                        # Вытаскиваем user_id автора сообщения из sender
+                        user_id = message.get("sender", {}).get("user_id")
+                        text = message.get("text", "")
                         
                         if user_id and text and "http" in text:
                             words = text.split()
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
+                            
             else:
                 time.sleep(5)
         except Exception as e:
