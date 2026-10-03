@@ -35,28 +35,52 @@ def delete_message(target_params, message_id):
 def send_message_with_qualities(user_id, video_url):
     try:
         params = {"user_id": user_id}
+        
+        # Сначала отправим сообщение без кнопок, чтобы узнать его message_id, 
+        # либо сформируем временное меню, но проще сделать отправку и сразу забрать message_id из ответа сервера.
+        initial_data = {
+            "text": "⏳ Подготовка меню качества..."
+        }
+        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=initial_data, verify=False, timeout=15)
+        
+        msg_id = None
+        try:
+            res_json = res.json()
+            msg_id = res_json.get("message_id") or res_json.get("body", {}).get("message_id")
+        except:
+            pass
+            
+        if not msg_id:
+            # Если поймать ID не удалось, шлем обычным способом
+            return
+
+        # Теперь редактируем это сообщение, добавляя в него клавиатуру и текст, 
+        # либо отправляем новые кнопки сшитые с этим msg_id. 
+        # Самый надежный способ: удалить временное и отправить нормальное с кнопками, зашившими его ID.
+        delete_message(params, msg_id)
+
         data = {
-            "text": f"Выберите качество видео:",
+            "text": "Выберите качество видео:",
             "attachments": [
                 {
                     "type": "inline_keyboard",
                     "payload": {
                         "buttons": [
                             [
-                                {"type": "callback", "text": "1080p", "payload": f"1080|{video_url}"},
-                                {"type": "callback", "text": "720p", "payload": f"720|{video_url}"}
+                                {"type": "callback", "text": "1080p", "payload": f"1080|{msg_id}|{video_url}"},
+                                {"type": "callback", "text": "720p", "payload": f"720|{msg_id}|{video_url}"}
                             ],
                             [
-                                {"type": "callback", "text": "480p", "payload": f"480|{video_url}"},
-                                {"type": "callback", "text": "360p", "payload": f"360|{video_url}"}
+                                {"type": "callback", "text": "480p", "payload": f"480|{msg_id}|{video_url}"},
+                                {"type": "callback", "text": "360p", "payload": f"360|{msg_id}|{video_url}"}
                             ]
                         ]
                     }
                 }
             ]
         }
-        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
-        print(f"Ответ меню качества: статус {res.status_code}, тело: {res.text}")
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
+        
     except Exception as e:
         print(f"Ошибка отправки меню качества: {e}")
 
@@ -73,7 +97,7 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def process_video_request(target_params, resolution, video_url, message_id_to_delete):
-    # Сразу удаляем сообщение с выбором качества
+    # Удаляем сообщение с выбором качества по переданному через payload ID
     if message_id_to_delete:
         delete_message(target_params, message_id_to_delete)
     
@@ -92,7 +116,6 @@ def process_video_request(target_params, resolution, video_url, message_id_to_de
         if direct_url:
             print(f"Прямая ссылка получена: {direct_url[:60]}...")
             
-            # Отправляем итоговую чистую ссылку с названием
             result_data = {
                 "text": f"🎬 {title} ({resolution}p)\n{direct_url}"
             }
@@ -145,19 +168,10 @@ def main():
                         chat_id = message.get("chat_id") or update.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
                         
-                        # Расширенный поиск ID сообщения с кнопками для гарантированного удаления
-                        msg_to_delete_id = (
-                            message.get("message_id") or 
-                            message.get("body", {}).get("message_id") or 
-                            callback.get("message_id") or
-                            update.get("message_id") or
-                            update.get("message_callback", {}).get("message_id")
-                        )
-                        
                         if callback_id:
                             answer_callback(callback_id)
                             
-                        print(f"Клик! chat_id: {chat_id}, user_id: {user_id}, payload: {data_payload}, msg_id: {msg_to_delete_id}")
+                        print(f"Клик! chat_id: {chat_id}, user_id: {user_id}, payload: {data_payload}")
                         
                         if chat_id is None or chat_id == 0 or chat_id == "0":
                             if user_id:
@@ -167,8 +181,12 @@ def main():
                         else:
                             target_params = {"chat_id": chat_id}
                         
-                        if "|" in data_payload:
-                            res_str, video_url = data_payload.split("|", 1)
+                        # Парсим payload формата: качество | id_сообщения | ссылка
+                        parts = data_payload.split("|")
+                        if len(parts) >= 3:
+                            res_str = parts[0]
+                            msg_to_delete_id = int(parts[1])
+                            video_url = parts[2]
                             process_video_request(target_params, int(res_str), video_url, msg_to_delete_id)
                         continue
 
