@@ -103,17 +103,42 @@ def process_video_request(target_params, resolution, video_url, message_id_to_de
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(video_url, download=False)
             direct_url = info_dict.get('url')
+            thumbnail = info_dict.get('thumbnail')
+            title = info_dict.get('title', f"Видео ({resolution}p)")
+            duration = info_dict.get('duration')
             
         if direct_url:
             print(f"Прямая ссылка получена: {direct_url[:60]}...")
             
-            # Отправляем просто чистую ссылку текстом — мессенджер сам построит по ней превью с кнопкой Play, если это поддерживается
+            # Формируем правильный объект вложения video с параметрами
+            payload_data = {
+                "url": direct_url,
+                "title": title
+            }
+            if thumbnail:
+                payload_data["thumbnail"] = {"url": thumbnail}
+            if duration:
+                payload_data["duration"] = int(duration)
+
             data = {
-                "text": direct_url
+                "text": "",
+                "attachments": [
+                    {
+                        "type": "video",
+                        "payload": payload_data
+                    }
+                ]
             }
             
             res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data, verify=False, timeout=15)
-            print(f"Статус отправки ссылки: {res.status_code}, ответ: {res.text}")
+            print(f"Статус отправки видео-объекта: {res.status_code}, ответ: {res.text}")
+            
+            # Если платформа требует токен или отклоняет прямой URL, отправляем запасной вариант с надежной ссылкой-превью
+            if res.status_code != 200:
+                fallback_data = {
+                    "text": f"🎬 **{title}** ({resolution}p)\n👉 Смотреть видео: {direct_url}"
+                }
+                requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=fallback_data, verify=False, timeout=15)
             
             # Удаляем служебное сообщение «Получаю ссылку...»
             if status_message_id:
@@ -167,7 +192,6 @@ def main():
                         chat_id = message.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id")
                         
-                        # ID сообщения с кнопками для удаления
                         msg_to_delete_id = message.get("message_id") or message.get("body", {}).get("message_id")
                         
                         if callback_id:
