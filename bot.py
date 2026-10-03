@@ -142,15 +142,16 @@ def main():
                         data_payload = callback.get("payload", "")
                         message = update.get("message", {})
                         
-                        chat_id = message.get("chat_id")
-                        user_id = callback.get("user", {}).get("user_id") or callback.get("user_id")
+                        chat_id = message.get("chat_id") or update.get("chat_id")
+                        user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
                         
-                        # Надежно вытаскиваем ID сообщения с кнопками из разных возможных полей
+                        # Расширенный поиск ID сообщения с кнопками для гарантированного удаления
                         msg_to_delete_id = (
                             message.get("message_id") or 
                             message.get("body", {}).get("message_id") or 
                             callback.get("message_id") or
-                            update.get("message_id")
+                            update.get("message_id") or
+                            update.get("message_callback", {}).get("message_id")
                         )
                         
                         if callback_id:
@@ -194,4 +195,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
