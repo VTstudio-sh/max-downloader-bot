@@ -125,51 +125,42 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
+                    event_type = update.get("type")
+                    
                     # 1. Обработка нажатия на инлайн-кнопку (message_callback)
-                    if update.get("type") == "message_callback":
+                    if event_type == "message_callback":
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
-                        message = update.get("message", {})
                         
-                        # Главное исправление: для личного чата берем user_id из callback, а не из message.chat_id
+                        # Берем user_id строго из правильного пути[span_9](start_span)[span_9](end_span)
                         user_id = callback.get("user", {}).get("user_id")
-                        chat_id = message.get("chat_id")
                         
                         if callback_id:
                             answer_callback(callback_id)
                             
-                        print(f"Клик по кнопке! user_id: {user_id}, chat_id: {chat_id}, payload: {data_payload}")
+                        print(f"Клик по кнопке! user_id: {user_id}, payload: {data_payload}")
                         
-                        # Выбираем правильный параметр для отправки: если chat_id не 0, это группа, иначе личка по user_id
-                        if chat_id and chat_id != 0:
-                            target_param = {"chat_id": chat_id}
-                        elif user_id:
-                            target_param = {"user_id": int(user_id)}
-                        else:
-                            target_param = None
-
-                        if target_param and "|" in data_payload:
+                        if user_id and "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            # Передаем id для скачивания (используем user_id для имени файла)
-                            u_id = int(user_id) if user_id else 0
-                            download_and_send_video(u_id, int(res_str), video_url)
+                            download_and_send_video(int(user_id), int(res_str), video_url)
                         continue
 
-                    # 2. Обработка обычного текстового сообщения со ссылкой (message_created)
-                    message = update.get("message", {})
-                    user_id = (
-                        message.get("sender", {}).get("user_id") or
-                        message.get("from", {}).get("id")
-                    )
-                    
-                    body = message.get("body", {})
-                    text = body.get("text") or message.get("text", "")
-                    
-                    if user_id and text and "http" in text:
-                        words = text.split()
-                        url = next((w for w in words if w.startswith("http")), text)
-                        send_message_with_qualities(int(user_id), url)
+                    # 2. Обработка обычного текстового сообщения (message_created или аналогичные)
+                    if event_type == "message_created" or "message" in update:
+                        message = update.get("message", {})
+                        user_id = (
+                            message.get("sender", {}).get("user_id") or
+                            message.get("from", {}).get("id")
+                        )
+                        
+                        body = message.get("body", {})
+                        text = body.get("text") or message.get("text", "")
+                        
+                        if user_id and text and "http" in text:
+                            words = text.split()
+                            url = next((w for w in words if w.startswith("http")), text)
+                            send_message_with_qualities(int(user_id), url)
             else:
                 time.sleep(5)
         except Exception as e:
