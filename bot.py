@@ -46,7 +46,7 @@ def send_message_with_qualities(user_id, video_url):
         print(f"Ошибка отправки меню качества: {e}")
 
 def answer_callback(callback_id):
-    """Закрывает анимацию загрузки на кнопке у пользователя"""
+    """Гасим часики загрузки на кнопке через POST /answers"""
     try:
         requests.post(
             f"{BASE_URL}/answers", 
@@ -59,7 +59,7 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def download_and_send_video(user_id, resolution, video_url):
-    """Скачивает видео нужного качества и отправляет файл в личку"""
+    """Скачивает видео нужного качества и отправляет файл в личку по user_id"""
     filename = f"video_{user_id}.mp4"
     
     ydl_opts = {
@@ -125,13 +125,13 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # 1. Обработка нажатия на инлайн-кнопку
+                    # 1. Обработка нажатия на инлайн-кнопку (message_callback)
                     if update.get("type") == "message_callback":
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
                         
-                        # Берем user_id строго из callback.user.user_id согласно документации
+                        # Корректно извлекаем user_id из блока callback для личных сообщений[span_5](start_span)[span_5](end_span)
                         user_id = callback.get("user", {}).get("user_id")
                         
                         if callback_id:
@@ -144,7 +144,7 @@ def main():
                             download_and_send_video(int(user_id), int(res_str), video_url)
                         continue
 
-                    # 2. Обработка обычного текстового сообщения со ссылкой
+                    # 2. Обработка обычного текстового сообщения со ссылкой (message_created)
                     message = update.get("message", {})
                     user_id = (
                         message.get("sender", {}).get("user_id") or
