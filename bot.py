@@ -15,18 +15,17 @@ HEADERS = {
 }
 
 def send_message_with_qualities(chat_id, video_url):
-    """Отправляет сообщение с кнопками выбора качества через массив attachments, как требует MAX"""
+    """Отправляет сообщение с кнопками выбора качества через attachments с полем buttons"""
     try:
         params = {"user_id": chat_id}
         
-        # Правильная структура для MAX: инлайн-клавиатура внутри attachments
         data = {
             "text": f"Выберите качество:\n{video_url}",
             "attachments": [
                 {
                     "type": "inline_keyboard",
                     "payload": {
-                        "inline_keyboard": [
+                        "buttons": [
                             [
                                 {"text": "1080p", "callback_data": f"1080|{video_url}"},
                                 {"text": "720p", "callback_data": f"720|{video_url}"}
@@ -147,4 +146,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
