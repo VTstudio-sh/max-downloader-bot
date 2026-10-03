@@ -58,9 +58,9 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def download_and_send_video(user_id, resolution, video_url):
-    """Скачивает видео нужного качества и отправляет файл в личку по user_id"""
-    filename = f"video_{user_id}.mp4"
+def download_and_send_video(target_params, resolution, video_url):
+    """Скачивает видео нужного качества и отправляет файл, используя правильные параметры (user_id или chat_id)"""
+    filename = f"video_temp.mp4"
     
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
@@ -70,8 +70,7 @@ def download_and_send_video(user_id, resolution, video_url):
     }
     
     try:
-        params = {"user_id": user_id}
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
@@ -80,14 +79,14 @@ def download_and_send_video(user_id, resolution, video_url):
             file_size = os.path.getsize(filename) / (1024 * 1024)
             print(f"Видео скачано. Размер: {file_size:.2f} МБ")
             
-            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"📤 Отправляю файл ({file_size:.1f} МБ)..."}, verify=False, timeout=15)
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"📤 Отправляю файл ({file_size:.1f} МБ)..."}, verify=False, timeout=15)
             
             with open(filename, 'rb') as f:
                 files = {'file': f}
                 res = requests.post(
                     f"{BASE_URL}/messages", 
                     headers={"Authorization": TOKEN}, 
-                    params=params,
+                    params=target_params,
                     files=files, 
                     verify=False,
                     timeout=180
@@ -96,7 +95,7 @@ def download_and_send_video(user_id, resolution, video_url):
                 
     except Exception as e:
         print(f"Ошибка скачивания/отправки: {e}")
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params={"user_id": user_id}, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
     finally:
         if os.path.exists(filename):
             os.remove(filename)
@@ -132,21 +131,32 @@ def main():
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
+                        message = update.get("message", {})
                         
-                        # Берем user_id строго из правильного пути[span_9](start_span)[span_9](end_span)
-                        user_id = callback.get("user", {}).get("user_id")
+                        # Достаем ID
+                        chat_id = message.get("chat_id")
+                        user_id = callback.get("user", {}).get("user_id")[span_2](start_span)[span_2](end_span)
                         
                         if callback_id:
                             answer_callback(callback_id)
                             
-                        print(f"Клик по кнопке! user_id: {user_id}, payload: {data_payload}")
+                        print(f"Клик по кнопке! chat_id: {chat_id}, user_id: {user_id}, payload: {data_payload}")
                         
-                        if user_id and "|" in data_payload:
+                        # ЖЕСТКАЯ ПРОВЕРКА: если chat_id равен 0 или пустой, шлем строго через user_id[span_3](start_span)[span_3](end_span)[span_4](start_span)[span_4](end_span)
+                        if chat_id is None or chat_id == 0 or chat_id == "0":
+                            if user_id:
+                                target_params = {"user_id": int(user_id)}
+                            else:
+                                continue
+                        else:
+                            target_params = {"chat_id": chat_id}
+                        
+                        if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(int(user_id), int(res_str), video_url)
+                            download_and_send_video(target_params, int(res_str), video_url)
                         continue
 
-                    # 2. Обработка обычного текстового сообщения (message_created или аналогичные)
+                    # 2. Обработка обычного текстового сообщения
                     if event_type == "message_created" or "message" in update:
                         message = update.get("message", {})
                         user_id = (
@@ -169,4 +179,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
