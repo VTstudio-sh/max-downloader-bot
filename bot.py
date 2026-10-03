@@ -46,7 +46,7 @@ def send_message_with_qualities(user_id, video_url):
         print(f"Ошибка отправки меню качества: {e}")
 
 def answer_callback(callback_id):
-    """Гасим часики загрузки на кнопке через POST /answers"""
+    """Гасим анимацию загрузки (часики) на кнопке через POST /answers"""
     try:
         requests.post(
             f"{BASE_URL}/answers", 
@@ -130,18 +130,30 @@ def main():
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
+                        message = update.get("message", {})
                         
-                        # Корректно извлекаем user_id из блока callback для личных сообщений[span_5](start_span)[span_5](end_span)
+                        # Главное исправление: для личного чата берем user_id из callback, а не из message.chat_id
                         user_id = callback.get("user", {}).get("user_id")
+                        chat_id = message.get("chat_id")
                         
                         if callback_id:
                             answer_callback(callback_id)
                             
-                        print(f"Клик по кнопке! user_id: {user_id}, payload: {data_payload}")
+                        print(f"Клик по кнопке! user_id: {user_id}, chat_id: {chat_id}, payload: {data_payload}")
                         
-                        if user_id and "|" in data_payload:
+                        # Выбираем правильный параметр для отправки: если chat_id не 0, это группа, иначе личка по user_id
+                        if chat_id and chat_id != 0:
+                            target_param = {"chat_id": chat_id}
+                        elif user_id:
+                            target_param = {"user_id": int(user_id)}
+                        else:
+                            target_param = None
+
+                        if target_param and "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(int(user_id), int(res_str), video_url)
+                            # Передаем id для скачивания (используем user_id для имени файла)
+                            u_id = int(user_id) if user_id else 0
+                            download_and_send_video(u_id, int(res_str), video_url)
                         continue
 
                     # 2. Обработка обычного текстового сообщения со ссылкой (message_created)
@@ -166,3 +178,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
