@@ -26,7 +26,6 @@ def delete_message(target_params, message_id):
     if not message_id:
         return
     try:
-        # В зависимости от API мессенджера передаем message_id в params или delete запросом
         delete_params = target_params.copy()
         delete_params["message_id"] = message_id
         requests.delete(f"{BASE_URL}/messages", headers=HEADERS, params=delete_params, verify=False, timeout=10)
@@ -74,7 +73,7 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def process_video_request(target_params, resolution, video_url, message_id_to_delete):
-    # Сразу удаляем сообщение с выбором качества, чтобы не мешалось
+    # Сразу удаляем сообщение с выбором качества
     delete_message(target_params, message_id_to_delete)
     
     # Отправляем временное сообщение о процессе
@@ -108,37 +107,13 @@ def process_video_request(target_params, resolution, video_url, message_id_to_de
         if direct_url:
             print(f"Прямая ссылка получена: {direct_url[:60]}...")
             
-            # Пробуем отправить видео как вложение share
+            # Отправляем просто чистую ссылку текстом — мессенджер сам построит по ней превью с кнопкой Play, если это поддерживается
             data = {
-                "text": "",
-                "attachments": [
-                    {
-                        "type": "share",
-                        "payload": {
-                            "url": direct_url,
-                            "title": f"Видео ({resolution}p)"
-                        }
-                    }
-                ]
+                "text": direct_url
             }
             
             res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data, verify=False, timeout=15)
-            print(f"Статус отправки видео: {res.status_code}, ответ: {res.text}")
-            
-            # Если share не подошел, пробуем как file
-            if res.status_code != 200:
-                data_file = {
-                    "text": "",
-                    "attachments": [
-                        {
-                            "type": "file",
-                            "payload": {
-                                "url": direct_url
-                            }
-                        }
-                    ]
-                }
-                res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data_file, verify=False, timeout=15)
+            print(f"Статус отправки ссылки: {res.status_code}, ответ: {res.text}")
             
             # Удаляем служебное сообщение «Получаю ссылку...»
             if status_message_id:
@@ -192,7 +167,7 @@ def main():
                         chat_id = message.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id")
                         
-                        # Пытаемся вытащить ID сообщения с кнопками, чтобы потом его удалить
+                        # ID сообщения с кнопками для удаления
                         msg_to_delete_id = message.get("message_id") or message.get("body", {}).get("message_id")
                         
                         if callback_id:
