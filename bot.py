@@ -17,7 +17,6 @@ HEADERS = {
 def send_message_with_qualities(user_id, video_url):
     """Отправляет сообщение с кнопками выбора качества через user_id для лички"""
     try:
-        # Для личных сообщений используем user_id
         params = {"user_id": user_id}
         
         data = {
@@ -126,13 +125,13 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # 1. Обработка нажатия на инлайн-кнопку (message_callback)
+                    # 1. Обработка нажатия на инлайн-кнопку
                     if update.get("type") == "message_callback":
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
                         
-                        # Для лички берем user_id из callback.user.user_id
+                        # Берем user_id строго из callback.user.user_id согласно документации
                         user_id = callback.get("user", {}).get("user_id")
                         
                         if callback_id:
@@ -142,12 +141,11 @@ def main():
                         
                         if user_id and "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(user_id, int(res_str), video_url)
+                            download_and_send_video(int(user_id), int(res_str), video_url)
                         continue
 
-                    # 2. Обработка обычного текстового сообщения со ссылкой (message_created)
+                    # 2. Обработка обычного текстового сообщения со ссылкой
                     message = update.get("message", {})
-                    # Для личного диалога берем user_id из message.sender.user_id
                     user_id = (
                         message.get("sender", {}).get("user_id") or
                         message.get("from", {}).get("id")
@@ -159,7 +157,7 @@ def main():
                     if user_id and text and "http" in text:
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
-                        send_message_with_qualities(user_id, url)
+                        send_message_with_qualities(int(user_id), url)
             else:
                 time.sleep(5)
         except Exception as e:
@@ -168,4 +166,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
