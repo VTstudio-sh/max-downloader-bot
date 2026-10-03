@@ -15,7 +15,7 @@ HEADERS = {
 }
 
 def send_message_with_qualities(chat_id, video_url):
-    """Отправляет сообщение с кнопками выбора качества с правильными полями кнопок"""
+    """Отправляет сообщение с кнопками выбора качества"""
     try:
         params = {"user_id": chat_id}
         
@@ -44,6 +44,19 @@ def send_message_with_qualities(chat_id, video_url):
         print(f"Ответ меню качества: статус {res.status_code}, тело: {res.text}")
     except Exception as e:
         print(f"Ошибка отправки меню качества: {e}")
+
+def answer_callback(callback_id):
+    """Закрывает анимацию загрузки на кнопке у пользователя"""
+    try:
+        requests.post(
+            f"{BASE_URL}/answers", 
+            headers=HEADERS, 
+            json={"callback_id": callback_id}, 
+            verify=False, 
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Ошибка ответа на callback: {e}")
 
 def download_and_send_video(chat_id, resolution, video_url):
     """Скачивает видео нужного качества и отправляет файл в чат"""
@@ -112,13 +125,25 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # Обработка нажатий на инлайн-кнопки
-                    callback = update.get("callback_query") or update.get("callback")
-                    if callback:
-                        chat_id = callback.get("from", {}).get("id") or callback.get("chat_id")
-                        # Поддерживаем извлечение payload как из callback, так и из data
-                        data_payload = callback.get("payload") or callback.get("data", "")
-                        if "|" in data_payload:
+                    # Проверяем строгое соответствие типу нажатия кнопки
+                    if update.get("type") == "message_callback":
+                        callback = update.get("callback", {})
+                        callback_id = callback.get("callback_id")
+                        data_payload = callback.get("payload", "")
+                        
+                        # Достаем ID пользователя из структуры callback -> user -> user_id
+                        chat_id = (
+                            callback.get("user", {}).get("user_id") or
+                            update.get("message", {}).get("chat_id")
+                        )
+                        
+                        # Сразу убираем анимацию загрузки с кнопки
+                        if callback_id:
+                            answer_callback(callback_id)
+                            
+                        print(f"Клик по кнопке! chat_id: {chat_id}, payload: {data_payload}")
+                        
+                        if chat_id and "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
                             download_and_send_video(chat_id, int(res_str), video_url)
                         continue
