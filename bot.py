@@ -74,25 +74,9 @@ def answer_callback(callback_id):
 
 def process_video_request(target_params, resolution, video_url, message_id_to_delete):
     # Сразу удаляем сообщение с выбором качества
-    delete_message(target_params, message_id_to_delete)
+    if message_id_to_delete:
+        delete_message(target_params, message_id_to_delete)
     
-    # Отправляем временное сообщение о процессе
-    status_msg_res = requests.post(
-        f"{BASE_URL}/messages", 
-        headers=HEADERS, 
-        params=target_params, 
-        json={"text": f"⚡ Получаю ссылку для {resolution}p..."}, 
-        verify=False, 
-        timeout=15
-    )
-    
-    status_message_id = None
-    try:
-        status_data = status_msg_res.json()
-        status_message_id = status_data.get("message_id") or status_data.get("body", {}).get("message_id")
-    except:
-        pass
-
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
         'quiet': True,
@@ -103,47 +87,16 @@ def process_video_request(target_params, resolution, video_url, message_id_to_de
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(video_url, download=False)
             direct_url = info_dict.get('url')
-            thumbnail = info_dict.get('thumbnail')
-            title = info_dict.get('title', f"Видео ({resolution}p)")
-            duration = info_dict.get('duration')
+            title = info_dict.get('title', 'Видео')
             
         if direct_url:
             print(f"Прямая ссылка получена: {direct_url[:60]}...")
             
-            # Формируем правильный объект вложения video с параметрами
-            payload_data = {
-                "url": direct_url,
-                "title": title
+            # Отправляем итоговую чистую ссылку с названием
+            result_data = {
+                "text": f"🎬 {title} ({resolution}p)\n{direct_url}"
             }
-            if thumbnail:
-                payload_data["thumbnail"] = {"url": thumbnail}
-            if duration:
-                payload_data["duration"] = int(duration)
-
-            data = {
-                "text": "",
-                "attachments": [
-                    {
-                        "type": "video",
-                        "payload": payload_data
-                    }
-                ]
-            }
-            
-            res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data, verify=False, timeout=15)
-            print(f"Статус отправки видео-объекта: {res.status_code}, ответ: {res.text}")
-            
-            # Если платформа требует токен или отклоняет прямой URL, отправляем запасной вариант с надежной ссылкой-превью
-            if res.status_code != 200:
-                fallback_data = {
-                    "text": f"🎬 **{title}** ({resolution}p)\n👉 Смотреть видео: {direct_url}"
-                }
-                requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=fallback_data, verify=False, timeout=15)
-            
-            # Удаляем служебное сообщение «Получаю ссылку...»
-            if status_message_id:
-                delete_message(target_params, status_message_id)
-                
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=result_data, verify=False, timeout=15)
         else:
             requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": "❌ Не удалось получить прямую ссылку на видео."}, verify=False, timeout=15)
                 
@@ -192,12 +145,18 @@ def main():
                         chat_id = message.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id")
                         
-                        msg_to_delete_id = message.get("message_id") or message.get("body", {}).get("message_id")
+                        # Надежно вытаскиваем ID сообщения с кнопками из разных возможных полей
+                        msg_to_delete_id = (
+                            message.get("message_id") or 
+                            message.get("body", {}).get("message_id") or 
+                            callback.get("message_id") or
+                            update.get("message_id")
+                        )
                         
                         if callback_id:
                             answer_callback(callback_id)
                             
-                        print(f"Клик! chat_id: {chat_id}, user_id: {user_id}, payload: {data_payload}")
+                        print(f"Клик! chat_id: {chat_id}, user_id: {user_id}, payload: {data_payload}, msg_id: {msg_to_delete_id}")
                         
                         if chat_id is None or chat_id == 0 or chat_id == "0":
                             if user_id:
@@ -235,3 +194,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
