@@ -14,10 +14,11 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def send_message_with_qualities(chat_id, video_url):
-    """Отправляет сообщение с кнопками выбора качества"""
+def send_message_with_qualities(user_id, video_url):
+    """Отправляет сообщение с кнопками выбора качества через user_id для лички"""
     try:
-        params = {"user_id": chat_id}
+        # Для личных сообщений используем user_id
+        params = {"user_id": user_id}
         
         data = {
             "text": f"Выберите качество:\n{video_url}",
@@ -58,9 +59,9 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def download_and_send_video(chat_id, resolution, video_url):
-    """Скачивает видео нужного качества и отправляет файл в чат"""
-    filename = f"video_{chat_id}.mp4"
+def download_and_send_video(user_id, resolution, video_url):
+    """Скачивает видео нужного качества и отправляет файл в личку"""
+    filename = f"video_{user_id}.mp4"
     
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
@@ -70,7 +71,7 @@ def download_and_send_video(chat_id, resolution, video_url):
     }
     
     try:
-        params = {"user_id": chat_id}
+        params = {"user_id": user_id}
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json={"text": f"⚡ Скачиваю видео ({resolution}p)..."}, verify=False, timeout=15)
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -96,7 +97,7 @@ def download_and_send_video(chat_id, resolution, video_url):
                 
     except Exception as e:
         print(f"Ошибка скачивания/отправки: {e}")
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params={"user_id": chat_id}, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
+        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params={"user_id": user_id}, json={"text": f"❌ Ошибка при скачивании: {e}"}, verify=False, timeout=15)
     finally:
         if os.path.exists(filename):
             os.remove(filename)
@@ -125,45 +126,40 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # Проверяем нажатие на инлайн-кнопку
+                    # 1. Обработка нажатия на инлайн-кнопку (message_callback)
                     if update.get("type") == "message_callback":
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
                         
-                        chat_id = (
-                            callback.get("user", {}).get("user_id") or
-                            update.get("message", {}).get("recipient", {}).get("chat_id") or
-                            update.get("message", {}).get("chat_id")
-                        )
+                        # Для лички берем user_id из callback.user.user_id
+                        user_id = callback.get("user", {}).get("user_id")
                         
                         if callback_id:
                             answer_callback(callback_id)
                             
-                        print(f"Клик по кнопке! chat_id: {chat_id}, payload: {data_payload}")
+                        print(f"Клик по кнопке! user_id: {user_id}, payload: {data_payload}")
                         
-                        if chat_id and "|" in data_payload:
+                        if user_id and "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(chat_id, int(res_str), video_url)
+                            download_and_send_video(user_id, int(res_str), video_url)
                         continue
 
-                    # Обработка обычного сообщения со ссылкой
+                    # 2. Обработка обычного текстового сообщения со ссылкой (message_created)
                     message = update.get("message", {})
-                    chat_id = (
-                        message.get("chat_id") or
-                        message.get("recipient", {}).get("chat_id") or
+                    # Для личного диалога берем user_id из message.sender.user_id
+                    user_id = (
                         message.get("sender", {}).get("user_id") or
-                        message.get("from", {}).get("id") or
-                        message.get("chat", {}).get("id")
+                        message.get("from", {}).get("id")
                     )
                     
                     body = message.get("body", {})
                     text = body.get("text") or message.get("text", "")
                     
-                    if chat_id and text and "http" in text:
+                    if user_id and text and "http" in text:
                         words = text.split()
                         url = next((w for w in words if w.startswith("http")), text)
-                        send_message_with_qualities(chat_id, url)
+                        send_message_with_qualities(user_id, url)
             else:
                 time.sleep(5)
         except Exception as e:
@@ -172,3 +168,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
