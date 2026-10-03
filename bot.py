@@ -125,19 +125,18 @@ def main():
                     current_marker = data["marker"]
                 
                 for update in data.get("updates", []):
-                    # Проверяем строгое соответствие типу нажатия кнопки
+                    # Проверяем нажатие на инлайн-кнопку
                     if update.get("type") == "message_callback":
                         callback = update.get("callback", {})
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
                         
-                        # Достаем ID пользователя из структуры callback -> user -> user_id
                         chat_id = (
                             callback.get("user", {}).get("user_id") or
+                            update.get("message", {}).get("recipient", {}).get("chat_id") or
                             update.get("message", {}).get("chat_id")
                         )
                         
-                        # Сразу убираем анимацию загрузки с кнопки
                         if callback_id:
                             answer_callback(callback_id)
                             
@@ -152,6 +151,7 @@ def main():
                     message = update.get("message", {})
                     chat_id = (
                         message.get("chat_id") or
+                        message.get("recipient", {}).get("chat_id") or
                         message.get("sender", {}).get("user_id") or
                         message.get("from", {}).get("id") or
                         message.get("chat", {}).get("id")
@@ -172,4 +172,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
