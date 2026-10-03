@@ -21,11 +21,23 @@ def reset_webhook_on_start():
     except Exception as e:
         print(f"Не удалось сбросить вебхук: {e}")
 
+def delete_message(target_params, message_id):
+    """Удаляет сообщение по его ID"""
+    if not message_id:
+        return
+    try:
+        # В зависимости от API мессенджера передаем message_id в params или delete запросом
+        delete_params = target_params.copy()
+        delete_params["message_id"] = message_id
+        requests.delete(f"{BASE_URL}/messages", headers=HEADERS, params=delete_params, verify=False, timeout=10)
+    except Exception as e:
+        print(f"Ошибка удаления сообщения: {e}")
+
 def send_message_with_qualities(user_id, video_url):
     try:
         params = {"user_id": user_id}
         data = {
-            "text": f"Выберите качество:\n{video_url}",
+            "text": f"Выберите качество видео:",
             "attachments": [
                 {
                     "type": "inline_keyboard",
@@ -61,8 +73,27 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def send_video_by_direct_url(target_params, resolution, video_url):
-    """Получает прямую прямую ссылку на поток нужного качества через yt-dlp и отправляет её мгновенно"""
+def process_video_request(target_params, resolution, video_url, message_id_to_delete):
+    # Сразу удаляем сообщение с выбором качества, чтобы не мешалось
+    delete_message(target_params, message_id_to_delete)
+    
+    # Отправляем временное сообщение о процессе
+    status_msg_res = requests.post(
+        f"{BASE_URL}/messages", 
+        headers=HEADERS, 
+        params=target_params, 
+        json={"text": f"⚡ Получаю ссылку для {resolution}p..."}, 
+        verify=False, 
+        timeout=15
+    )
+    
+    status_message_id = None
+    try:
+        status_data = status_msg_res.json()
+        status_message_id = status_data.get("message_id") or status_data.get("body", {}).get("message_id")
+    except:
+        pass
+
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
         'quiet': True,
@@ -70,8 +101,6 @@ def send_video_by_direct_url(target_params, resolution, video_url):
     }
     
     try:
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"⚡ Получаю ссылку для {resolution}p..."}, verify=False, timeout=15)
-        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(video_url, download=False)
             direct_url = info_dict.get('url')
@@ -79,31 +108,47 @@ def send_video_by_direct_url(target_params, resolution, video_url):
         if direct_url:
             print(f"Прямая ссылка получена: {direct_url[:60]}...")
             
-            # Отправляем видео как вложение или ссылкой, которую платформа рендерит сама
+            # Пробуем отправить видео как вложение share
             data = {
-                "text": f"Вот ваше видео в разрешении {resolution}p:",
+                "text": "",
                 "attachments": [
                     {
-                        "type": "video",
+                        "type": "share",
                         "payload": {
-                            "url": direct_url
+                            "url": direct_url,
+                            "title": f"Видео ({resolution}p)"
                         }
                     }
                 ]
             }
             
             res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data, verify=False, timeout=15)
-            print(f"Статус отправки видео-вложения: {res.status_code}, ответ: {res.text}")
+            print(f"Статус отправки видео: {res.status_code}, ответ: {res.text}")
             
+            # Если share не подошел, пробуем как file
             if res.status_code != 200:
-                # Резервный вариант, если вложение по ссылке не поддерживается сервером
-                fallback_data = {"text": f"Ссылка на видео ({resolution}p):\n{direct_url}"}
-                requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=fallback_data, verify=False, timeout=15)
+                data_file = {
+                    "text": "",
+                    "attachments": [
+                        {
+                            "type": "file",
+                            "payload": {
+                                "url": direct_url
+                            }
+                        }
+                    ]
+                }
+                res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=data_file, verify=False, timeout=15)
+            
+            # Удаляем служебное сообщение «Получаю ссылку...»
+            if status_message_id:
+                delete_message(target_params, status_message_id)
+                
         else:
             requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": "❌ Не удалось получить прямую ссылку на видео."}, verify=False, timeout=15)
                 
     except Exception as e:
-        print(f"Ошибка обработки ссылки: {e}")
+        print(f"Ошибка обработки: {e}")
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка: {e}"}, verify=False, timeout=15)
 
 def main():
@@ -147,6 +192,9 @@ def main():
                         chat_id = message.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id")
                         
+                        # Пытаемся вытащить ID сообщения с кнопками, чтобы потом его удалить
+                        msg_to_delete_id = message.get("message_id") or message.get("body", {}).get("message_id")
+                        
                         if callback_id:
                             answer_callback(callback_id)
                             
@@ -162,19 +210,19 @@ def main():
                         
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            send_video_by_direct_url(target_params, int(res_str), video_url)
+                            process_video_request(target_params, int(res_str), video_url, msg_to_delete_id)
                         continue
 
                     if event_type == "message_created" or "message" in update:
-                        message = update.get("message", update)
+                        msg = update.get("message", update)
                         user_id = (
-                            message.get("sender", {}).get("user_id") or
-                            message.get("from", {}).get("id") or
-                            message.get("user_id")
+                            msg.get("sender", {}).get("user_id") or
+                            msg.get("from", {}).get("id") or
+                            msg.get("user_id")
                         )
                         
-                        body = message.get("body", {})
-                        text = body.get("text") or message.get("text", "")
+                        body = msg.get("body", {})
+                        text = body.get("text") or msg.get("text", "")
                         
                         if user_id and text and "http" in text:
                             words = text.split()
@@ -188,4 +236,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
