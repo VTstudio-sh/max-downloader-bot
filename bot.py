@@ -107,7 +107,14 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         'outtmpl': temp_filename,
         'quiet': True,
         'no_check_certificate': True,
-        'extractor-args': {'youtube': {'player_client': ['android', 'web']}} # Обход блокировки YouTube
+        'extractor-args': {
+            'youtube': {
+                'player_client': ['web', 'android'],
+                'skip': ['dash', 'hls']
+            }
+        },
+        'geo_bypass': True,
+        'nocheckcertificate': True,
     }
     
     try:
@@ -272,4 +279,4 @@ def main():
             time.sleep(5)
 
 if __name__ == '__main__':
-    main()
+main()
