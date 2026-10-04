@@ -109,7 +109,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         'no_check_certificate': True,
         'extractor-args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'mweb']
+                'player_client': ['android']
             }
         },
         'geo_bypass': True,
@@ -279,3 +279,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
