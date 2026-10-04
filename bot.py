@@ -109,7 +109,8 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         'no_check_certificate': True,
         'extractor-args': {
             'youtube': {
-                'player_client': ['mweb']
+                'player_client': ['android', 'ios'],
+                'skip': ['web', 'mweb']
             }
         },
         'geo_bypass': True,
