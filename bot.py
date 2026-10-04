@@ -107,12 +107,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         'outtmpl': temp_filename,
         'quiet': True,
         'no_check_certificate': True,
-        'extractor-args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'skip': ['web', 'mweb']
-            }
-        },
         'geo_bypass': True,
         'nocheckcertificate': True,
     }
@@ -194,89 +188,74 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот запущен и готов к работе!")
-    
-    current_marker = None
-
-    while True:
-        try:
-            params = {'timeout': 30}
-            if current_marker:
-                params['marker'] = current_marker
+    print("Проверка обновлений на GitHub Actions...")
+    try:
+        response = requests.get(
+            f"{BASE_URL}/updates", 
+            headers=HEADERS, 
+            verify=False,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            updates = data.get("updates", [])
+            for update in updates:
+                event_type = update.get("type")
+                callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                 
-            response = requests.get(
-                f"{BASE_URL}/updates", 
-                headers=HEADERS, 
-                params=params,
-                verify=False,
-                timeout=45
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                if "marker" in data:
-                    current_marker = data["marker"]
-                
-                updates = data.get("updates", [])
-                for update in updates:
-                    event_type = update.get("type")
-                    callback = update.get("callback") or update.get("message_callback", {}).get("callback")
+                if event_type == "message_callback" or callback:
+                    if not callback and "callback_id" in update:
+                        callback = update
+                        
+                    callback_id = callback.get("callback_id")
+                    data_payload = callback.get("payload", "")
+                    message = update.get("message", {})
                     
-                    if event_type == "message_callback" or callback:
-                        if not callback and "callback_id" in update:
-                            callback = update
-                            
-                        callback_id = callback.get("callback_id")
-                        data_payload = callback.get("payload", "")
-                        message = update.get("message", {})
+                    chat_id = message.get("chat_id") or update.get("chat_id")
+                    user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
+                    
+                    msg_id = (
+                        message.get("message_id") or 
+                        message.get("body", {}).get("message_id") or 
+                        callback.get("message_id") or
+                        update.get("message_id") or
+                        update.get("message_callback", {}).get("message_id")
+                    )
+                    
+                    if callback_id:
+                        answer_callback(callback_id)
                         
-                        chat_id = message.get("chat_id") or update.get("chat_id")
-                        user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
-                        
-                        msg_id = (
-                            message.get("message_id") or 
-                            message.get("body", {}).get("message_id") or 
-                            callback.get("message_id") or
-                            update.get("message_id") or
-                            update.get("message_callback", {}).get("message_id")
-                        )
-                        
-                        if callback_id:
-                            answer_callback(callback_id)
-                            
-                        if chat_id is None or chat_id == 0 or chat_id == "0":
-                            if user_id:
-                                target_params = {"user_id": int(user_id)}
-                            else:
-                                continue
+                    if chat_id is None or chat_id == 0 or chat_id == "0":
+                        if user_id:
+                            target_params = {"user_id": int(user_id)}
                         else:
-                            target_params = {"chat_id": chat_id}
-                        
-                        if "|" in data_payload:
-                            res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(target_params, int(res_str), video_url, msg_id)
-                        continue
+                            continue
+                    else:
+                        target_params = {"chat_id": chat_id}
+                    
+                    if "|" in data_payload:
+                        res_str, video_url = data_payload.split("|", 1)
+                        download_and_send_video(target_params, int(res_str), video_url, msg_id)
+                    continue
 
-                    if event_type == "message_created" or "message" in update:
-                        msg = update.get("message", update)
-                        user_id = (
-                            msg.get("sender", {}).get("user_id") or
-                            msg.get("from", {}).get("id") or
-                            msg.get("user_id")
-                        )
-                        
-                        body = msg.get("body", {})
-                        text = body.get("text") or msg.get("text", "")
-                        
-                        if user_id and text and "http" in text:
-                            words = text.split()
-                            url = next((w for w in words if w.startswith("http")), text)
-                            send_message_with_qualities(int(user_id), url)
-            else:
-                time.sleep(5)
-        except Exception as e:
-            print(f"Ошибка в общем цикле: {e}")
-            time.sleep(5)
+                if event_type == "message_created" or "message" in update:
+                    msg = update.get("message", update)
+                    user_id = (
+                        msg.get("sender", {}).get("user_id") or
+                        msg.get("from", {}).get("id") or
+                        msg.get("user_id")
+                    )
+                    
+                    body = msg.get("body", {})
+                    text = body.get("text") or msg.get("text", "")
+                    
+                    if user_id and text and "http" in text:
+                        words = text.split()
+                        url = next((w for w in words if w.startswith("http")), text)
+                        send_message_with_qualities(int(user_id), url)
+    except Exception as e:
+        print(f"Ошибка при запросе обновлений: {e}")
 
 if __name__ == '__main__':
     main()
