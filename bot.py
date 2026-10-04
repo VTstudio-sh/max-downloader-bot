@@ -54,7 +54,7 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Двухэтапная загрузка видео по официальной документации МАХ"""
+    """Двухэтапная загрузка видео с правильной передачей на сторонний сервер"""
     try:
         # Шаг 1: Получаем персональную URL-ссылку для загрузки файла
         step1_url = "https://platform-api2.max.ru/uploads"
@@ -78,11 +78,21 @@ def upload_video_to_max(video_path):
             print(f"Не найдена ссылка 'url' в ответе: {data1}")
             return None
             
-        # Шаг 2: Отправляем сам файл на полученный URL методом POST (multipart/form-data)
+        # Шаг 2: Отправляем файл на полученный URL БЕЗ заголовка Authorization (так как токен уже в URL)
         print(f"Шаг 2: Загрузка файла на полученный URL...")
+        
+        res2 = None
+        # Пробуем отправить с ключом 'file'
         with open(video_path, 'rb') as f:
-            files = {'data': f}
-            res2 = requests.post(upload_url, files=files, headers={"Authorization": TOKEN}, verify=False, timeout=180)
+            files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
+            res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
+            
+        # Если сервер вернул ошибку, пробуем вариант с ключом 'data'
+        if res2.status_code != 200:
+            print(f"Попытка с 'file' вернула статус {res2.status_code}, пробуем с 'data'...")
+            with open(video_path, 'rb') as f:
+                files = {'data': f}
+                res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
             
         print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
             
@@ -97,7 +107,6 @@ def upload_video_to_max(video_path):
                 res2_json.get("data", {}).get("token")
             )
             
-            # Глубокий поиск, если структура вложена (например, в словари типа photos/videos)
             if not token:
                 for key, val in res2_json.items():
                     if isinstance(val, dict):
