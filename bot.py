@@ -14,13 +14,6 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def reset_webhook_on_start():
-    try:
-        res = requests.delete(f"{BASE_URL}/subscriptions", headers=HEADERS, verify=False, timeout=10)
-        print(f"Сброс старого вебхука: статус {res.status_code}, ответ: {res.text}")
-    except Exception as e:
-        print(f"Не удалось сбросить вебхук: {e}")
-
 def delete_message(target_params, message_id):
     """Удаляет сообщение по его ID"""
     if not message_id:
@@ -36,29 +29,8 @@ def send_message_with_qualities(user_id, video_url):
     try:
         params = {"user_id": user_id}
         
-        # Сначала отправим сообщение без кнопок, чтобы узнать его message_id, 
-        # либо сформируем временное меню, но проще сделать отправку и сразу забрать message_id из ответа сервера.
-        initial_data = {
-            "text": "⏳ Подготовка меню качества..."
-        }
-        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=initial_data, verify=False, timeout=15)
-        
-        msg_id = None
-        try:
-            res_json = res.json()
-            msg_id = res_json.get("message_id") or res_json.get("body", {}).get("message_id")
-        except:
-            pass
-            
-        if not msg_id:
-            # Если поймать ID не удалось, шлем обычным способом
-            return
-
-        # Теперь редактируем это сообщение, добавляя в него клавиатуру и текст, 
-        # либо отправляем новые кнопки сшитые с этим msg_id. 
-        # Самый надежный способ: удалить временное и отправить нормальное с кнопками, зашившими его ID.
-        delete_message(params, msg_id)
-
+        # Отправляем меню выбора качества сразу, чтобы не плодить лишние сообщения
+        # Но сначала сделаем пустой payload, а message_id получим из ответа сервера
         data = {
             "text": "Выберите качество видео:",
             "attachments": [
@@ -67,20 +39,53 @@ def send_message_with_qualities(user_id, video_url):
                     "payload": {
                         "buttons": [
                             [
-                                {"type": "callback", "text": "1080p", "payload": f"1080|{msg_id}|{video_url}"},
-                                {"type": "callback", "text": "720p", "payload": f"720|{msg_id}|{video_url}"}
+                                {"type": "callback", "text": "1080p", "payload": f"1080|0|{video_url}"},
+                                {"type": "callback", "text": "720p", "payload": f"720|0|{video_url}"}
                             ],
                             [
-                                {"type": "callback", "text": "480p", "payload": f"480|{msg_id}|{video_url}"},
-                                {"type": "callback", "text": "360p", "payload": f"360|{msg_id}|{video_url}"}
+                                {"type": "callback", "text": "480p", "payload": f"480|0|{video_url}"},
+                                {"type": "callback", "text": "360p", "payload": f"360|0|{video_url}"}
                             ]
                         ]
                     }
                 }
             ]
         }
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
+        res = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
         
+        # Если сервер возвращает ID созданного сообщения, отредактируем кнопки, зашив в них правильный ID для удаления
+        try:
+            res_json = res.json()
+            msg_id = res_json.get("message_id") or res_json.get("body", {}).get("message_id")
+            if msg_id:
+                # Обновляем клавиатуру, подставляя настоящий msg_id в payload
+                update_data = {
+                    "text": "Выберите качество видео:",
+                    "attachments": [
+                        {
+                            "type": "inline_keyboard",
+                            "payload": {
+                                "buttons": [
+                                    [
+                                        {"type": "callback", "text": "1080p", "payload": f"1080|{msg_id}|{video_url}"},
+                                        {"type": "callback", "text": "720p", "payload": f"720|{msg_id}|{video_url}"}
+                                    ],
+                                    [
+                                        {"type": "callback", "text": "480p", "payload": f"480|{msg_id}|{video_url}"},
+                                        {"type": "callback", "text": "360p", "payload": f"360|{msg_id}|{video_url}"}
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+                edit_params = params.copy()
+                edit_params["message_id"] = msg_id
+                requests.put(f"{BASE_URL}/messages", headers=HEADERS, params=edit_params, json=update_data, verify=False, timeout=15)
+        except Exception as ex:
+            print(f"Не удалось обновить кнопки с ID: {ex}")
+
+        print(f"Ответ меню качества: статус {res.status_code}")
     except Exception as e:
         print(f"Ошибка отправки меню качества: {e}")
 
@@ -98,7 +103,7 @@ def answer_callback(callback_id):
 
 def process_video_request(target_params, resolution, video_url, message_id_to_delete):
     # Удаляем сообщение с выбором качества по переданному через payload ID
-    if message_id_to_delete:
+    if message_id_to_delete and message_id_to_delete != 0:
         delete_message(target_params, message_id_to_delete)
     
     ydl_opts = {
@@ -128,8 +133,7 @@ def process_video_request(target_params, resolution, video_url, message_id_to_de
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка: {e}"}, verify=False, timeout=15)
 
 def main():
-    print("Бот запущен, сбрасываем старые подписки...")
-    reset_webhook_on_start()
+    print("Бот запущен и готов к работе!")
     
     current_marker = None
 
@@ -181,7 +185,6 @@ def main():
                         else:
                             target_params = {"chat_id": chat_id}
                         
-                        # Парсим payload формата: качество | id_сообщения | ссылка
                         parts = data_payload.split("|")
                         if len(parts) >= 3:
                             res_str = parts[0]
