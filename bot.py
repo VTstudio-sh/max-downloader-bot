@@ -54,9 +54,7 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Двухэтапная загрузка: берем токен из Шага 1 и заливаем файл"""
     try:
-        # Шаг 1: Получаем URL для загрузки и готовый token
         step1_url = "https://platform-api2.max.ru/uploads"
         params = {"type": "video"}
         step1_headers = {
@@ -73,15 +71,13 @@ def upload_video_to_max(video_path):
             
         data1 = res1.json()
         upload_url = data1.get("url")
-        file_token = data1.get("token") # Токен уже здесь!
+        file_token = data1.get("token")
         
         if not upload_url:
             print(f"Не найдена ссылка 'url' в ответе: {data1}")
             return None
             
-        # Шаг 2: Отправляем сам файл на полученный URL
         print(f"Шаг 2: Загрузка файла на полученный URL...")
-        
         res2 = None
         with open(video_path, 'rb') as f:
             files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
@@ -95,7 +91,6 @@ def upload_video_to_max(video_path):
         print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
             
         if res2.status_code == 200:
-            # Возвращаем токен, полученный на Шаге 1
             return file_token
         else:
             print(f"Ошибка при загрузке файла на URL: {res2.status_code} - {res2.text}")
@@ -112,6 +107,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         'outtmpl': temp_filename,
         'quiet': True,
         'no_check_certificate': True,
+        'extractor-args': {'youtube': {'player_client': ['android', 'web']}} # Обход блокировки YouTube
     }
     
     try:
