@@ -54,9 +54,9 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Двухэтапная загрузка видео с правильной передачей на сторонний сервер"""
+    """Двухэтапная загрузка: берем токен из Шага 1 и заливаем файл"""
     try:
-        # Шаг 1: Получаем персональную URL-ссылку для загрузки файла
+        # Шаг 1: Получаем URL для загрузки и готовый token
         step1_url = "https://platform-api2.max.ru/uploads"
         params = {"type": "video"}
         step1_headers = {
@@ -64,7 +64,7 @@ def upload_video_to_max(video_path):
             "Authorization": TOKEN
         }
         
-        print(f"Шаг 1: Запрос ссылки для загрузки видео...")
+        print(f"Шаг 1: Запрос ссылки и токена...")
         res1 = requests.post(step1_url, params=params, headers=step1_headers, verify=False, timeout=15)
         print(f"Ответ Шага 1 (статус {res1.status_code}): {res1.text}")
         
@@ -73,23 +73,21 @@ def upload_video_to_max(video_path):
             
         data1 = res1.json()
         upload_url = data1.get("url")
+        file_token = data1.get("token") # Токен уже здесь!
         
         if not upload_url:
             print(f"Не найдена ссылка 'url' в ответе: {data1}")
             return None
             
-        # Шаг 2: Отправляем файл на полученный URL БЕЗ заголовка Authorization (так как токен уже в URL)
+        # Шаг 2: Отправляем сам файл на полученный URL
         print(f"Шаг 2: Загрузка файла на полученный URL...")
         
         res2 = None
-        # Пробуем отправить с ключом 'file'
         with open(video_path, 'rb') as f:
             files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
             res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
             
-        # Если сервер вернул ошибку, пробуем вариант с ключом 'data'
         if res2.status_code != 200:
-            print(f"Попытка с 'file' вернула статус {res2.status_code}, пробуем с 'data'...")
             with open(video_path, 'rb') as f:
                 files = {'data': f}
                 res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
@@ -97,30 +95,8 @@ def upload_video_to_max(video_path):
         print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
             
         if res2.status_code == 200:
-            res2_json = res2.json()
-            
-            # Универсальный поиск токена в ответе сервера
-            token = (
-                res2_json.get("token") or 
-                res2_json.get("file_id") or 
-                res2_json.get("payload", {}).get("token") or
-                res2_json.get("data", {}).get("token")
-            )
-            
-            if not token:
-                for key, val in res2_json.items():
-                    if isinstance(val, dict):
-                        for sub_k, sub_v in val.items():
-                            if isinstance(sub_v, dict) and "token" in sub_v:
-                                token = sub_v["token"]
-                                break
-                            elif sub_k == "token":
-                                token = sub_v
-                                break
-                    if token:
-                        break
-                        
-            return token
+            # Возвращаем токен, полученный на Шаге 1
+            return file_token
         else:
             print(f"Ошибка при загрузке файла на URL: {res2.status_code} - {res2.text}")
             return None
