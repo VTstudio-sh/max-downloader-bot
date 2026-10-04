@@ -8,7 +8,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://botapi.max.ru"
-UPLOAD_URL = "https://b2b.max.ru/api/v1/uploads"
 
 HEADERS = {
     "Authorization": TOKEN,
@@ -55,46 +54,69 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Загружает видео на сервер MAX по новому эндпоинту и возвращает токен файла"""
+    """Двухэтапная загрузка видео по официальной документации МАХ"""
     try:
-        with open(video_path, 'rb') as f:
-            files = {
-                'data': f,
-            }
-            data = {
-                'type': 'video',
-            }
-            upload_headers = {
-                'Authorization': f'Bearer {TOKEN}' if not TOKEN.startswith('Bearer ') else TOKEN
-            }
-            
-            print(f"Отправка файла {video_path} на {UPLOAD_URL}...")
-            res = requests.post(
-                UPLOAD_URL, 
-                files=files, 
-                data=data, 
-                headers=upload_headers, 
-                verify=False, 
-                timeout=180
-            )
-            
-        print(f"Ответ от сервера загрузки (статус {res.status_code}): {res.text}")
+        # Шаг 1: Получаем персональную URL-ссылку для загрузки файла
+        step1_url = "https://platform-api2.max.ru/uploads"
+        params = {"type": "video"}
+        step1_headers = {
+            "Accept": "application/json",
+            "Authorization": TOKEN
+        }
         
-        if res.status_code == 200:
-            res_json = res.json()
-            # Пробуем разные возможные варианты ключа с токеном
+        print(f"Шаг 1: Запрос ссылки для загрузки видео...")
+        res1 = requests.post(step1_url, params=params, headers=step1_headers, verify=False, timeout=15)
+        print(f"Ответ Шага 1 (статус {res1.status_code}): {res1.text}")
+        
+        if res1.status_code != 200:
+            return None
+            
+        data1 = res1.json()
+        upload_url = data1.get("url")
+        
+        if not upload_url:
+            print(f"Не найдена ссылка 'url' в ответе: {data1}")
+            return None
+            
+        # Шаг 2: Отправляем сам файл на полученный URL методом POST (multipart/form-data)
+        print(f"Шаг 2: Загрузка файла на полученный URL...")
+        with open(video_path, 'rb') as f:
+            files = {'data': f}
+            res2 = requests.post(upload_url, files=files, headers={"Authorization": TOKEN}, verify=False, timeout=180)
+            
+        print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
+            
+        if res2.status_code == 200:
+            res2_json = res2.json()
+            
+            # Универсальный поиск токена в ответе сервера
             token = (
-                res_json.get("token") or 
-                res_json.get("file_id") or 
-                res_json.get("payload", {}).get("token") or
-                res_json.get("data", {}).get("token")
+                res2_json.get("token") or 
+                res2_json.get("file_id") or 
+                res2_json.get("payload", {}).get("token") or
+                res2_json.get("data", {}).get("token")
             )
+            
+            # Глубокий поиск, если структура вложена (например, в словари типа photos/videos)
+            if not token:
+                for key, val in res2_json.items():
+                    if isinstance(val, dict):
+                        for sub_k, sub_v in val.items():
+                            if isinstance(sub_v, dict) and "token" in sub_v:
+                                token = sub_v["token"]
+                                break
+                            elif sub_k == "token":
+                                token = sub_v
+                                break
+                    if token:
+                        break
+                        
             return token
         else:
-            print(f"Ошибка загрузки файла на сервер MAX: {res.status_code} - {res.text}")
+            print(f"Ошибка при загрузке файла на URL: {res2.status_code} - {res2.text}")
             return None
     except Exception as e:
-        print(f"Исключение при загрузке видео в MAX: {e}")
+        print(f"Исключение при двухэтапной загрузке видео в MAX: {e}")
         return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
