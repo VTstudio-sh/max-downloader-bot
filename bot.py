@@ -4,10 +4,8 @@ import requests
 import urllib3
 import yt_dlp
 
-# Отключаем предупреждения о ненадежных SSL-сертификатах
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Конфигурация
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://botapi.max.ru"
 
@@ -17,7 +15,6 @@ HEADERS = {
 }
 
 def send_message_with_qualities(user_id, video_url):
-    """Отправляет пользователю инлайн-кнопки с выбором качества видео"""
     try:
         params = {"user_id": user_id}
         data = {
@@ -45,7 +42,6 @@ def send_message_with_qualities(user_id, video_url):
         print(f"Ошибка отправки меню качества: {e}")
 
 def answer_callback(callback_id):
-    """Подтверждает обработку нажатия инлайн-кнопки (убирает крутилку у пользователя)"""
     try:
         requests.post(
             f"{BASE_URL}/answers", 
@@ -58,50 +54,51 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Загружает видео на сервер MAX через POST /uploads и возвращает токен файла"""
+    """Загружает видео на сервер MAX и возвращает токен файла"""
     try:
-        # Шаг 1: Запрашиваем URL для загрузки файла у сервера MAX
         upload_url_res = requests.post(
             f"{BASE_URL}/uploads", 
-            headers=HEADERS, 
-            json={"type": "video"}, 
+            headers={"Authorization": TOKEN}, 
+            params={"type": "video"}, 
             verify=False, 
             timeout=15
         )
         
+        print(f"Ответ от /uploads (статус {upload_url_res.status_code}): {upload_url_res.text}")
+        
         if upload_url_res.status_code != 200:
-            print(f"Ошибка получения URL для загрузки: {upload_url_res.text}")
             return None
             
         upload_data = upload_url_res.json()
-        upload_endpoint = upload_data.get("url") or f"{BASE_URL}/uploads"
+        upload_endpoint = upload_data.get("url") or upload_data.get("link") or upload_data.get("payload", {}).get("url")
         
-        # Шаг 2: Отправляем сам файл методом POST multipart/form-data
+        if not upload_endpoint:
+            print(f"Не найден URL для загрузки в ответе: {upload_data}")
+            return None
+            
         with open(video_path, 'rb') as f:
             files = {'file': f}
-            file_headers = {"Authorization": TOKEN}
             res = requests.post(
                 upload_endpoint, 
-                headers=file_headers, 
+                headers={"Authorization": TOKEN}, 
                 files=files, 
                 verify=False, 
                 timeout=120
             )
             
+        print(f"Ответ отправки файла на endpoint (статус {res.status_code}): {res.text}")
+            
         if res.status_code == 200:
             res_json = res.json()
-            # Достаем токен файла из возможных вариантов ответа API
             token = res_json.get("token") or res_json.get("file_id") or res_json.get("payload", {}).get("token")
             return token
         else:
-            print(f"Ошибка загрузки файла на сервер MAX: {res.status_code} - {res.text}")
             return None
     except Exception as e:
         print(f"Исключение при загрузке видео в MAX: {e}")
         return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
-    """Скачивает видео через yt-dlp, загружает его на MAX и отправляет в чат в виде плеера"""
     temp_filename = f"temp_{int(time.time())}.mp4"
     
     ydl_opts = {
@@ -112,7 +109,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
     }
     
     try:
-        # Уведомляем пользователя о начале загрузки
         requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
@@ -122,7 +118,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             timeout=15
         )
         
-        # Скачиваем видео во временный файл
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             title = info.get('title', 'Видеофайл')
@@ -132,13 +127,11 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             
         print(f"Видео скачано локально: {temp_filename}. Загружаем в MAX...")
         
-        # Загружаем файл на сервера MAX и получаем токен
         file_token = upload_video_to_max(temp_filename)
         
         if not file_token:
             raise Exception("Не удалось получить токен загруженного файла от сервера MAX.")
             
-        # Формируем сообщение с аттачментом типа video и полученным токеном
         video_payload = {
             "text": f"🎬 {title[:100]} ({resolution}p)",
             "attachments": [
@@ -162,7 +155,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         
         print(f"Ответ API на отправку видео с токеном: статус {res.status_code}, тело: {res.text}")
 
-        # Удаляем старое сообщение с выбором качества
         if message_id:
             try:
                 edit_params = target_params.copy()
@@ -186,7 +178,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             pass
             
     finally:
-        # Гарантированно удаляем временный файл, чтобы не забивать диск
         if os.path.exists(temp_filename):
             try:
                 os.remove(temp_filename)
@@ -222,7 +213,6 @@ def main():
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
-                    # Обработка нажатий на инлайн-кнопки (выбор качества)
                     if event_type == "message_callback" or callback:
                         if not callback and "callback_id" in update:
                             callback = update
@@ -258,7 +248,6 @@ def main():
                             download_and_send_video(target_params, int(res_str), video_url, msg_id)
                         continue
 
-                    # Обработка входящих текстовых сообщений со ссылками
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
                         user_id = (
