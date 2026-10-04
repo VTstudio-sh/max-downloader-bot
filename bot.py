@@ -53,65 +53,85 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def process_video_request(target_params, resolution, video_url, message_id):
-    # Убираем старые кнопки, чтобы не висели
-    if message_id:
-        edit_params = target_params.copy()
-        edit_params["message_id"] = message_id
-        try:
-            requests.put(f"{BASE_URL}/messages", headers=HEADERS, params=edit_params, json={"text": f"⏳ Скачиваю видео ({resolution}p)...", "attachments": []}, verify=False, timeout=10)
-        except:
-            pass
-
-    file_path = f"video_{int(time.time())}.mp4"
-    
+def download_and_send_video(target_params, resolution, video_url, message_id):
+    # Настройки yt-dlp для быстрого извлечения ссылок без скачивания на диск[span_1](start_span)[span_1](end_span)
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
-        'outtmpl': file_path,
         'quiet': True,
         'no_check_certificate': True,
     }
     
     try:
+        # Информируем пользователя о начале генерации плеера[span_2](start_span)[span_2](end_span)
+        requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json={"text": f"⚙️ Генерирую плеер для качества {resolution}p..."},
+            verify=False,
+            timeout=15
+        )
+        
+        # Быстро забираем метаданные и прямую ссылку у VK без загрузки видео на диск[span_3](start_span)[span_3](end_span)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+            info = ydl.extract_info(video_url, download=False)
+            direct_video_url = info.get('url')
+            title = info.get('title', 'Видеофайл')
+            thumbnail_url = info.get('thumbnail', '')
+            duration = info.get('duration', 0)
             
-        if os.path.exists(file_path):
-            print(f"Видео скачано: {file_path}, отправляю...")
+        if not direct_video_url:
+            raise Exception("Не удалось получить прямую ссылку на видеопоток.")
             
-            # Отправляем файл на сервер мессенджера
-            with open(file_path, 'rb') as f:
-                files = {'file': f}
-                # Для отправки файла заголовок Content-Type должен определяться автоматически (передаем только Auth)
-                file_headers = {"Authorization": TOKEN}
-                
-                res = requests.post(
-                    f"{BASE_URL}/messages", 
-                    headers=file_headers, 
-                    params=target_params, 
-                    files=files, 
-                    verify=False, 
-                    timeout=60
-                )
-                print(f"Результат отправки файла: статус {res.status_code}")
-                
-            # Удаляем временный файл после отправки
-            os.remove(file_path)
-            
-            # Удаляем плашку «Скачиваю...» если она осталась
-            if message_id:
-                try:
-                    requests.delete(f"{BASE_URL}/messages", headers=HEADERS, params=edit_params, verify=False, timeout=10)
-                except:
-                    pass
-        else:
-            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": "❌ Не удалось скачать видеофайла."}, verify=False, timeout=15)
+        # Формируем специальный JSON для API MAX, чтобы появился плеер с кнопкой Play[span_4](start_span)[span_4](end_span)
+        video_payload = {
+            "text": f"🎬 {title} ({resolution}p)",
+            "attachments": [
+                {
+                    "type": "video",  # Указываем тип вложения как видео[span_5](start_span)[span_5](end_span)
+                    "payload": {
+                        "url": direct_video_url,  # Прямая ссылка на поток (ваша длинная ссылка из okcdn)[span_6](start_span)[span_6](end_span)
+                        "title": title,  # Заголовок видео[span_7](start_span)[span_7](end_span)
+                        "image_url": thumbnail_url,  # Обложка, которая покажется до нажатия Play[span_8](start_span)[span_8](end_span)
+                        "duration": int(duration) if duration else 0  # Длительность в секундах[span_9](start_span)[span_9](end_span)
+                    }
+                }
+            ]
+        }
+        
+        # Отправляем видео-аттачмент в MAX[span_10](start_span)[span_10](end_span)
+        res = requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json=video_payload,
+            verify=False,
+            timeout=15
+        )
+        print(f"<- Статус отправки видео-плеера: {res.status_code}, ответ: {res.text}")
+        
+        # Удаляем сообщение с кнопками качества, если есть его ID
+        if message_id:
+            try:
+                edit_params = target_params.copy()
+                edit_params["message_id"] = message_id
+                requests.delete(f"{BASE_URL}/messages", headers=HEADERS, params=edit_params, verify=False, timeout=10)
+            except:
+                pass
                 
     except Exception as e:
-        print(f"Ошибка скачивания/отправки: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json={"text": f"❌ Ошибка: {e}"}, verify=False, timeout=15)
+        print(f"❌ Ошибка извлечения/отправки видео: {e}")
+        try:
+            requests.post(
+                f"{BASE_URL}/messages",
+                headers=HEADERS,
+                params=target_params,
+                json={"text": f"❌ Ошибка в качестве {resolution}p. Ошибка: {e}"},
+                verify=False,
+                timeout=15
+            )
+        except:
+            pass
 
 def main():
     print("Бот запущен и готов к работе!")
@@ -174,7 +194,7 @@ def main():
                         
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            process_video_request(target_params, int(res_str), video_url, msg_id)
+                            download_and_send_video(target_params, int(res_str), video_url, msg_id)
                         continue
 
                     if event_type == "message_created" or "message" in update:
@@ -200,4 +220,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
