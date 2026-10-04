@@ -8,6 +8,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://botapi.max.ru"
+UPLOAD_URL = "https://b2b.max.ru/api/v1/uploads"
 
 HEADERS = {
     "Authorization": TOKEN,
@@ -54,45 +55,43 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Загружает видео на сервер MAX и возвращает токен файла"""
+    """Загружает видео на сервер MAX по новому эндпоинту и возвращает токен файла"""
     try:
-        upload_url_res = requests.post(
-            f"{BASE_URL}/uploads", 
-            headers={"Authorization": TOKEN}, 
-            params={"type": "video"}, 
-            verify=False, 
-            timeout=15
-        )
-        
-        print(f"Ответ от /uploads (статус {upload_url_res.status_code}): {upload_url_res.text}")
-        
-        if upload_url_res.status_code != 200:
-            return None
-            
-        upload_data = upload_url_res.json()
-        upload_endpoint = upload_data.get("url") or upload_data.get("link") or upload_data.get("payload", {}).get("url")
-        
-        if not upload_endpoint:
-            print(f"Не найден URL для загрузки в ответе: {upload_data}")
-            return None
-            
         with open(video_path, 'rb') as f:
-            files = {'file': f}
+            files = {
+                'data': f,
+            }
+            data = {
+                'type': 'video',
+            }
+            upload_headers = {
+                'Authorization': f'Bearer {TOKEN}' if not TOKEN.startswith('Bearer ') else TOKEN
+            }
+            
+            print(f"Отправка файла {video_path} на {UPLOAD_URL}...")
             res = requests.post(
-                upload_endpoint, 
-                headers={"Authorization": TOKEN}, 
+                UPLOAD_URL, 
                 files=files, 
+                data=data, 
+                headers=upload_headers, 
                 verify=False, 
-                timeout=120
+                timeout=180
             )
             
-        print(f"Ответ отправки файла на endpoint (статус {res.status_code}): {res.text}")
-            
+        print(f"Ответ от сервера загрузки (статус {res.status_code}): {res.text}")
+        
         if res.status_code == 200:
             res_json = res.json()
-            token = res_json.get("token") or res_json.get("file_id") or res_json.get("payload", {}).get("token")
+            # Пробуем разные возможные варианты ключа с токеном
+            token = (
+                res_json.get("token") or 
+                res_json.get("file_id") or 
+                res_json.get("payload", {}).get("token") or
+                res_json.get("data", {}).get("token")
+            )
             return token
         else:
+            print(f"Ошибка загрузки файла на сервер MAX: {res.status_code} - {res.text}")
             return None
     except Exception as e:
         print(f"Исключение при загрузке видео в MAX: {e}")
