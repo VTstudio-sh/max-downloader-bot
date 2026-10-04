@@ -54,7 +54,6 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
-    # Настройки yt-dlp для быстрого извлечения ссылок без скачивания на диск[span_1](start_span)[span_1](end_span)
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
         'quiet': True,
@@ -62,17 +61,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
     }
     
     try:
-        # Информируем пользователя о начале генерации плеера[span_2](start_span)[span_2](end_span)
-        requests.post(
-            f"{BASE_URL}/messages",
-            headers=HEADERS,
-            params=target_params,
-            json={"text": f"⚙️ Генерирую плеер для качества {resolution}p..."},
-            verify=False,
-            timeout=15
-        )
-        
-        # Быстро забираем метаданные и прямую ссылку у VK без загрузки видео на диск[span_3](start_span)[span_3](end_span)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             direct_video_url = info.get('url')
@@ -83,23 +71,22 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         if not direct_video_url:
             raise Exception("Не удалось получить прямую ссылку на видеопоток.")
             
-        # Формируем специальный JSON для API MAX, чтобы появился плеер с кнопкой Play[span_4](start_span)[span_4](end_span)
+        # Пытаемся отправить как встроенный видео-плеер
         video_payload = {
             "text": f"🎬 {title} ({resolution}p)",
             "attachments": [
                 {
-                    "type": "video",  # Указываем тип вложения как видео[span_5](start_span)[span_5](end_span)
+                    "type": "video",
                     "payload": {
-                        "url": direct_video_url,  # Прямая ссылка на поток (ваша длинная ссылка из okcdn)[span_6](start_span)[span_6](end_span)
-                        "title": title,  # Заголовок видео[span_7](start_span)[span_7](end_span)
-                        "image_url": thumbnail_url,  # Обложка, которая покажется до нажатия Play[span_8](start_span)[span_8](end_span)
-                        "duration": int(duration) if duration else 0  # Длительность в секундах[span_9](start_span)[span_9](end_span)
+                        "url": direct_video_url,
+                        "title": title[:100],
+                        "image_url": thumbnail_url if thumbnail_url else None,
+                        "duration": int(duration) if duration else 0
                     }
                 }
             ]
         }
         
-        # Отправляем видео-аттачмент в MAX[span_10](start_span)[span_10](end_span)
         res = requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
@@ -108,9 +95,17 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             verify=False,
             timeout=15
         )
-        print(f"<- Статус отправки видео-плеера: {res.status_code}, ответ: {res.text}")
         
-        # Удаляем сообщение с кнопками качества, если есть его ID
+        print(f"Ответ API на отправку видео: статус {res.status_code}, тело: {res.text}")
+        
+        # Если API выдал ошибку на тип видео, отправляем запасной вариант с прямой ссылкой
+        if res.status_code != 200:
+            fallback_payload = {
+                "text": f"🎬 {title} ({resolution}p)\n{direct_video_url}"
+            }
+            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=fallback_payload, verify=False, timeout=15)
+
+        # Удаляем старое сообщение с кнопками качества
         if message_id:
             try:
                 edit_params = target_params.copy()
@@ -120,7 +115,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
                 
     except Exception as e:
-        print(f"❌ Ошибка извлечения/отправки видео: {e}")
+        print(f"❌ Ошибка: {e}")
         try:
             requests.post(
                 f"{BASE_URL}/messages",
