@@ -3,7 +3,6 @@ import time
 import requests
 import urllib3
 import yt_dlp
-import tempfile
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -54,83 +53,98 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def download_video_file(video_url, resolution):
-    """Скачивает видео файл и возвращает путь к нему."""
-    ydl_opts = {
-        'format': f'bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best',
-        'merge_output_format': 'mp4',
-        'quiet': True,
-        'no_warnings': True,
-        'no_check_certificate': True,
-        'socket_timeout': 30,
-    }
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
-        title = info.get('title', 'video')
+def upload_video_to_max(video_path):
+    """Загружает видео на сервер MAX и возвращает токен файла"""
+    try:
+        # Шаг 1: Запрашиваем URL для загрузки (или отправляем напрямую в зависимости от эндпоинта uploads)
+        upload_url_res = requests.post(f"{BASE_URL}/uploads", headers={"Authorization": TOKEN}, verify=False, timeout=15)
+        if upload_url_res.status_code != 200:
+            print(f"Ошибка получения URL для загрузки: {upload_url_res.text}")
+            return None
+            
+        upload_data = upload_url_res.json()
+        # Обычно API возвращает url для загрузки и сам токен/идентификатор
+        upload_endpoint = upload_data.get("url") or f"{BASE_URL}/uploads"
         
-        # Создаём временный файл
-        tmp = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
-        tmp.close()
-        
-        ydl_opts['outtmpl'] = tmp.name
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
-            ydl2.download([video_url])
-        
-        return tmp.name, title
+        with open(video_path, 'rb') as f:
+            files = {'file': f}
+            # Отправляем файл на сервер
+            res = requests.post(upload_endpoint, headers={"Authorization": TOKEN}, files=files, verify=False, timeout=60)
+            
+        if res.status_code == 200:
+            res_json = res.json()
+            # Проверяем, где именно возвращается токен (в поле token или file_id/payload)
+            token = res_json.get("token") or res_json.get("file_id") or res_json.get("payload", {}).get("token")
+            return token
+        else:
+            print(f"Ошибка загрузки файла на сервер MAX: {res.status_code} - {res.text}")
+            return None
+    except Exception as e:
+        print(f"Исключение при загрузке видео в MAX: {e}")
+        return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
-    file_path = None
+    temp_filename = f"temp_{int(time.time())}.mp4"
+    
+    ydl_opts = {
+        'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
+        'outtmpl': temp_filename,
+        'quiet': True,
+        'no_check_certificate': True,
+    }
+    
     try:
-        # Скачиваем файл
-        file_path, title = download_video_file(video_url, resolution)
+        # Уведомляем пользователя, что пошла загрузка
+        requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json={"text": f"⏳ Скачиваю и подготавливаю видео ({resolution}p)..."},
+            verify=False,
+            timeout=15
+        )
         
-        # Отправляем файл напрямую (multipart/form-data)
-        with open(file_path, 'rb') as f:
-            files = {
-                'video': (f'{title}.mp4', f, 'video/mp4')
-            }
-            data = {
-                'text': f"🎬 {title} ({resolution}p)",
-                **target_params  # chat_id или user_id
-            }
+        # Скачиваем видео во временный файл
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            title = info.get('title', 'Видеофайл')
             
-            res = requests.post(
-                f"{BASE_URL}/messages",
-                headers={"Authorization": TOKEN},
-                data=data,
-                files=files,
-                verify=False,
-                timeout=60
-            )
+        if not os.path.exists(temp_filename):
+            raise Exception("Не удалось скачать видеофайл.")
             
-            print(f"Ответ API: статус {res.status_code}, тело: {res.text}")
+        print(f"Видео скачано локально: {temp_filename}. Загружаем в MAX...")
+        
+        # Загружаем на сервер MAX для получения токена
+        file_token = upload_video_to_max(temp_filename)
+        
+        if not file_token:
+            raise Exception("Не удалось получить токен загруженного файла от сервера MAX.")
             
-            # Если не получилось отправить файлом — пробуем URL
-            if res.status_code != 200:
-                print("Отправка файлом не удалась, пробуем URL...")
-                ydl_opts = {
-                    'format': f'best[height<={resolution}][ext=mp4]/best',
-                    'quiet': True,
-                    'no_check_certificate': True,
+        # Формируем запрос с токеном, как подсказала поддержка
+        video_payload = {
+            "text": f"🎬 {title[:100]} ({resolution}p)",
+            "attachments": [
+                {
+                    "type": "video",
+                    "payload": {
+                        "token": file_token
+                    }
                 }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(video_url, download=False)
-                    direct_url = info.get('url')
-                
-                fallback_payload = {
-                    "text": f"🎬 {title} ({resolution}p)\n{direct_url}"
-                }
-                requests.post(
-                    f"{BASE_URL}/messages",
-                    headers=HEADERS,
-                    params=target_params,
-                    json=fallback_payload,
-                    verify=False,
-                    timeout=15
-                )
+            ]
+        }
+        
+        res = requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json=video_payload,
+            verify=False,
+            timeout=15
+        )
+        
+        print(f"Ответ API на отправку видео с токеном: статус {res.status_code}, тело: {res.text}")
 
-        # Удаляем сообщение с кнопками
+        # Удаляем сообщение с кнопками качества
         if message_id:
             try:
                 edit_params = target_params.copy()
@@ -146,22 +160,24 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 f"{BASE_URL}/messages",
                 headers=HEADERS,
                 params=target_params,
-                json={"text": f"❌ Ошибка в качестве {resolution}p: {e}"},
+                json={"text": f"❌ Ошибка при обработке видео ({resolution}p): {e}"},
                 verify=False,
                 timeout=15
             )
         except:
             pass
+            
     finally:
-        # Чистим временный файл
-        if file_path and os.path.exists(file_path):
+        # Очищаем временный файл в любом случае
+        if os.path.exists(temp_filename):
             try:
-                os.remove(file_path)
+                os.remove(temp_filename)
             except:
                 pass
 
 def main():
     print("Бот запущен и готов к работе!")
+    
     current_marker = None
 
     while True:
