@@ -3,6 +3,7 @@ import time
 import requests
 import urllib3
 import yt_dlp
+import tempfile
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -53,59 +54,83 @@ def answer_callback(callback_id):
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
-def download_and_send_video(target_params, resolution, video_url, message_id):
+def download_video_file(video_url, resolution):
+    """Скачивает видео файл и возвращает путь к нему."""
     ydl_opts = {
-        'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
+        'format': f'bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best',
+        'merge_output_format': 'mp4',
         'quiet': True,
+        'no_warnings': True,
         'no_check_certificate': True,
+        'socket_timeout': 30,
     }
     
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            direct_video_url = info.get('url')
-            title = info.get('title', 'Видеофайл')
-            thumbnail_url = info.get('thumbnail', '')
-            duration = info.get('duration', 0)
-            
-        if not direct_video_url:
-            raise Exception("Не удалось получить прямую ссылку на видеопоток.")
-            
-        # Пытаемся отправить как встроенный видео-плеер
-        video_payload = {
-            "text": f"🎬 {title} ({resolution}p)",
-            "attachments": [
-                {
-                    "type": "video",
-                    "payload": {
-                        "url": direct_video_url,
-                        "title": title[:100],
-                        "image_url": thumbnail_url if thumbnail_url else None,
-                        "duration": int(duration) if duration else 0
-                    }
-                }
-            ]
-        }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        title = info.get('title', 'video')
         
-        res = requests.post(
-            f"{BASE_URL}/messages",
-            headers=HEADERS,
-            params=target_params,
-            json=video_payload,
-            verify=False,
-            timeout=15
-        )
+        # Создаём временный файл
+        tmp = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+        tmp.close()
         
-        print(f"Ответ API на отправку видео: статус {res.status_code}, тело: {res.text}")
+        ydl_opts['outtmpl'] = tmp.name
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl2:
+            ydl2.download([video_url])
         
-        # Если API выдал ошибку на тип видео, отправляем запасной вариант с прямой ссылкой
-        if res.status_code != 200:
-            fallback_payload = {
-                "text": f"🎬 {title} ({resolution}p)\n{direct_video_url}"
-            }
-            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=fallback_payload, verify=False, timeout=15)
+        return tmp.name, title
 
-        # Удаляем старое сообщение с кнопками качества
+def download_and_send_video(target_params, resolution, video_url, message_id):
+    file_path = None
+    try:
+        # Скачиваем файл
+        file_path, title = download_video_file(video_url, resolution)
+        
+        # Отправляем файл напрямую (multipart/form-data)
+        with open(file_path, 'rb') as f:
+            files = {
+                'video': (f'{title}.mp4', f, 'video/mp4')
+            }
+            data = {
+                'text': f"🎬 {title} ({resolution}p)",
+                **target_params  # chat_id или user_id
+            }
+            
+            res = requests.post(
+                f"{BASE_URL}/messages",
+                headers={"Authorization": TOKEN},
+                data=data,
+                files=files,
+                verify=False,
+                timeout=60
+            )
+            
+            print(f"Ответ API: статус {res.status_code}, тело: {res.text}")
+            
+            # Если не получилось отправить файлом — пробуем URL
+            if res.status_code != 200:
+                print("Отправка файлом не удалась, пробуем URL...")
+                ydl_opts = {
+                    'format': f'best[height<={resolution}][ext=mp4]/best',
+                    'quiet': True,
+                    'no_check_certificate': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(video_url, download=False)
+                    direct_url = info.get('url')
+                
+                fallback_payload = {
+                    "text": f"🎬 {title} ({resolution}p)\n{direct_url}"
+                }
+                requests.post(
+                    f"{BASE_URL}/messages",
+                    headers=HEADERS,
+                    params=target_params,
+                    json=fallback_payload,
+                    verify=False,
+                    timeout=15
+                )
+
+        # Удаляем сообщение с кнопками
         if message_id:
             try:
                 edit_params = target_params.copy()
@@ -121,16 +146,22 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 f"{BASE_URL}/messages",
                 headers=HEADERS,
                 params=target_params,
-                json={"text": f"❌ Ошибка в качестве {resolution}p. Ошибка: {e}"},
+                json={"text": f"❌ Ошибка в качестве {resolution}p: {e}"},
                 verify=False,
                 timeout=15
             )
         except:
             pass
+    finally:
+        # Чистим временный файл
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
 
 def main():
     print("Бот запущен и готов к работе!")
-    
     current_marker = None
 
     while True:
