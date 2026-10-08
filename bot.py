@@ -2,7 +2,6 @@ import os
 import time
 import requests
 import urllib3
-import yt_dlp
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -62,10 +61,7 @@ def upload_video_to_max(video_path):
             "Authorization": TOKEN
         }
         
-        print(f"Шаг 1: Запрос ссылки и токена...")
         res1 = requests.post(step1_url, params=params, headers=step1_headers, verify=False, timeout=15)
-        print(f"Ответ Шага 1 (статус {res1.status_code}): {res1.text}")
-        
         if res1.status_code != 200:
             return None
             
@@ -74,11 +70,8 @@ def upload_video_to_max(video_path):
         file_token = data1.get("token")
         
         if not upload_url:
-            print(f"Не найдена ссылка 'url' в ответе: {data1}")
             return None
             
-        print(f"Шаг 2: Загрузка файла на полученный URL...")
-        res2 = None
         with open(video_path, 'rb') as f:
             files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
             res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
@@ -88,59 +81,88 @@ def upload_video_to_max(video_path):
                 files = {'data': f}
                 res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
             
-        print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
-            
         if res2.status_code == 200:
             return file_token
         else:
-            print(f"Ошибка при загрузке файла на URL: {res2.status_code} - {res2.text}")
             return None
     except Exception as e:
-        print(f"Исключение при двухэтапной загрузке видео в MAX: {e}")
+        print(f"Ошибка загрузки в MAX: {e}")
         return None
+
+def download_via_cobalt(video_url, resolution):
+    """Используем публичный Cobalt API для обхода блокировок YouTube"""
+    cobalt_api_url = "https://api.cobalt.tools/api/json"
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "url": video_url,
+        "videoQuality": str(resolution),
+        "filenamePattern": "basic"
+    }
+    
+    try:
+        response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            status = data.get("status")
+            
+            if status == "redirect" or status == "stream":
+                return data.get("url")
+            elif status == "picker":
+                # Если доступно несколько вариантов, берем первый из списка
+                picker = data.get("picker", [])
+                if picker:
+                    return picker[0].get("url")
+        print(f"Ошибка Cobalt API: {response.text}")
+    except Exception as e:
+        print(f"Исключение при запросе к Cobalt: {e}")
+    return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
     temp_filename = f"temp_{int(time.time())}.mp4"
-    
-    ydl_opts = {
-        'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
-        'outtmpl': temp_filename,
-        'quiet': True,
-        'no_check_certificate': True,
-        'extractor-args': {
-            'youtube': {
-                'player_client': ['web_embedded'],
-            }
-        },
-        'geo_bypass': True,
-    }
     
     try:
         requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
             params=target_params,
-            json={"text": f"⏳ Скачиваю и подготавливаю видео ({resolution}p)..."},
+            json={"text": f"⏳ Получаю ссылку через Cobalt API ({resolution}p)..."},
             verify=False,
             timeout=15
         )
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            title = info.get('title', 'Видеофайл')
-            
-        if not os.path.exists(temp_filename):
-            raise Exception("Не удалось скачать видеофайл.")
-            
-        print(f"Видео скачано локально: {temp_filename}. Загружаем в MAX...")
+        # Получаем прямую ссылку на файл через Cobalt
+        direct_download_link = download_via_cobalt(video_url, resolution)
         
+        if not direct_download_link:
+            raise Exception("Не удалось получить ссылку на видео от Cobalt API.")
+            
+        # Скачиваем файл на сервер во временный файл
+        print(f"Скачивание файла с потока...")
+        file_res = requests.get(direct_download_link, stream=True, timeout=120)
+        if file_res.status_code == 200:
+            with open(temp_filename, 'wb') as f:
+                for chunk in file_res.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+        else:
+            raise Exception(f"Ошибка скачивания файла по прямой ссылке: {file_res.status_code}")
+            
+        if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+            raise Exception("Скачанный файл пустой или не сохранился.")
+            
+        print(f"Видео скачано, загружаем в MAX...")
         file_token = upload_video_to_max(temp_filename)
         
         if not file_token:
             raise Exception("Не удалось получить токен загруженного файла от сервера MAX.")
             
         video_payload = {
-            "text": f"🎬 {title[:100]} ({resolution}p)",
+            "text": f"🎬 Готово! ({resolution}p)",
             "attachments": [
                 {
                     "type": "video",
@@ -151,7 +173,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             ]
         }
         
-        res = requests.post(
+        requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
             params=target_params,
@@ -159,8 +181,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             verify=False,
             timeout=15
         )
-        
-        print(f"Ответ API на отправку видео с токеном: статус {res.status_code}, тело: {res.text}")
 
         if message_id:
             try:
@@ -177,7 +197,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 f"{BASE_URL}/messages",
                 headers=HEADERS,
                 params=target_params,
-                json={"text": f"❌ Ошибка при обработке видео ({resolution}p): {e}"},
+                json={"text": f"❌ Ошибка при обработке видео: {e}"},
                 verify=False,
                 timeout=15
             )
@@ -192,8 +212,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот запущен и готов к работе!")
-    
+    print("Бот для MAX запущен!")
     current_marker = None
 
     while True:
@@ -273,7 +292,7 @@ def main():
             else:
                 time.sleep(5)
         except Exception as e:
-            print(f"Ошибка в общем цикле: {e}")
+            print(f"Ошибка в цикле обновлений: {e}")
             time.sleep(5)
 
 if __name__ == '__main__':
