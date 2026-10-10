@@ -5,9 +5,8 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ========== НАСТРОЙКИ ==========
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
-COBALT_URL = "https://ТВОЙ-ПРОЕКТ.up.railway.app/"  # <-- ЗАМЕНИМ ПОЗЖЕ!
+COBALT_URL = "https://cobalt-production-4179.up.railway.app/"
 BASE_URL = "https://botapi.max.ru"
 
 HEADERS = {
@@ -102,7 +101,6 @@ def upload_video_to_max(video_path):
 
 
 def download_via_cobalt(video_url, resolution):
-    """Запрос к СВОЕМУ Cobalt API на Railway (YouTube, VK, TikTok)."""
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json"
@@ -157,7 +155,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
 
         direct_download_link = download_via_cobalt(video_url, resolution)
         if not direct_download_link:
-            raise Exception("Не удалось получить ссылку на видео от Cobalt API.")
+            raise Exception("Не удалось получить ссылку от Cobalt.")
 
         print(f"Скачивание файла...")
         file_res = requests.get(direct_download_link, stream=True, timeout=180)
@@ -170,12 +168,12 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             raise Exception(f"Ошибка скачивания: {file_res.status_code}")
 
         if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
-            raise Exception("Скачанный файл пустой.")
+            raise Exception("Файл пустой.")
 
         print(f"Видео скачано ({os.path.getsize(temp_filename)} байт), загружаю в MAX...")
         file_token = upload_video_to_max(temp_filename)
         if not file_token:
-            raise Exception("Не удалось получить токен файла от MAX.")
+            raise Exception("Не удалось получить токен от MAX.")
 
         time.sleep(2)
 
