@@ -8,7 +8,6 @@ import yt_dlp
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
-COBALT_URL = "https://cobalt-production-4179.up.railway.app/"
 BASE_URL = "https://botapi.max.ru"
 
 HEADERS = {
@@ -16,7 +15,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Защита от дублей — храним обработанные ID событий
 processed_updates = set()
+processed_message_ids = set()
+processed_callbacks = set()
 
 
 def clean_url(url):
@@ -43,10 +45,6 @@ def clean_url(url):
         return url.split("?")[0]
 
     return url
-
-
-def is_youtube(url):
-    return "youtube.com" in url or "youtu.be" in url
 
 
 def send_message_with_qualities(user_id, video_url):
@@ -134,53 +132,12 @@ def upload_video_to_max(video_path):
         return None
 
 
-def download_via_cobalt(video_url, resolution):
-    """Для VK, TikTok и других сервисов — через Cobalt."""
-    clean = clean_url(video_url)
-    print(f"[Cobalt] Оригинал: {video_url}")
-    print(f"[Cobalt] Очищенная: {clean}")
-
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    payload = {
-        "url": clean,
-        "videoQuality": str(resolution),
-        "downloadMode": "auto",
-        "filenameStyle": "basic"
-    }
-
-    try:
-        response = requests.post(COBALT_URL, json=payload, headers=headers, timeout=60)
-        print(f"[Cobalt] Ответ: {response.status_code}")
-
-        if response.status_code == 200:
-            data = response.json()
-            status = data.get("status")
-            print(f"[Cobalt] Статус: {status}")
-
-            if status in ("tunnel", "redirect"):
-                return data.get("url")
-            elif status == "picker":
-                picker = data.get("picker", [])
-                if picker:
-                    return picker[0].get("url")
-            elif status == "error":
-                print(f"[Cobalt] Ошибка: {data.get('error', {})}")
-                return None
-
-        print(f"[Cobalt] Плохой ответ: {response.status_code} — {response.text[:300]}")
-    except Exception as e:
-        print(f"[Cobalt] Исключение: {e}")
-
-    return None
-
-
 def download_via_ytdlp(video_url, resolution, output_path):
-    """Для YouTube — через yt-dlp напрямую."""
+    """Скачивание через yt-dlp (работает и для YouTube, и для VK)."""
     clean = clean_url(video_url)
     print(f"[yt-dlp] Оригинал: {video_url}")
     print(f"[yt-dlp] Очищенная: {clean}")
 
-    # Формат: лучший mp4 с указанным разрешением или ниже
     fmt = (
         f"bestvideo[height<={resolution}][ext=mp4]+bestaudio[ext=m4a]"
         f"/best[height<={resolution}][ext=mp4]"
@@ -216,6 +173,39 @@ def download_via_ytdlp(video_url, resolution, output_path):
     return None
 
 
+def send_video_to_max_with_retry(target_params, resolution, file_token):
+    """Пробуем отправить видео до 6 раз, если MAX ещё не обработал файл."""
+    video_payload = {
+        "text": f"🎬 Готово! ({resolution}p)",
+        "attachments": [
+            {"type": "video", "payload": {"token": file_token}}
+        ]
+    }
+
+    for attempt in range(6):
+        res = requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json=video_payload,
+            verify=False,
+            timeout=15
+        )
+        print(f"Попытка {attempt + 1}: {res.status_code} — {res.text[:200]}")
+
+        if res.status_code == 200:
+            return True
+
+        # Если MAX ещё не обработал видео — ждём и пробуем снова
+        if "attachment.not.ready" in res.text or "not_processed" in res.text:
+            time.sleep(5)
+            continue
+        else:
+            return False
+
+    return False
+
+
 def download_and_send_video(target_params, resolution, video_url, message_id):
     temp_filename = f"temp_{int(time.time())}.mp4"
 
@@ -229,33 +219,9 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             timeout=15
         )
 
-        if is_youtube(video_url):
-            print("Определён YouTube → используем yt-dlp")
-            result_path = download_via_ytdlp(video_url, resolution, temp_filename)
-            if not result_path:
-                # Фолбэк на Cobalt, если yt-dlp не справился
-                print("yt-dlp не справился, пробуем Cobalt...")
-                direct = download_via_cobalt(video_url, resolution)
-                if not direct:
-                    raise Exception("Не удалось скачать видео с YouTube.")
-                file_res = requests.get(direct, stream=True, timeout=180)
-                with open(temp_filename, 'wb') as f:
-                    for chunk in file_res.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-        else:
-            print("Определён VK/TikTok → используем Cobalt")
-            direct = download_via_cobalt(video_url, resolution)
-            if not direct:
-                raise Exception("Не удалось получить ссылку от Cobalt.")
-            file_res = requests.get(direct, stream=True, timeout=180)
-            if file_res.status_code == 200:
-                with open(temp_filename, 'wb') as f:
-                    for chunk in file_res.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-            else:
-                raise Exception(f"Ошибка скачивания: {file_res.status_code}")
+        result_path = download_via_ytdlp(video_url, resolution, temp_filename)
+        if not result_path:
+            raise Exception("Не удалось скачать видео.")
 
         if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
             raise Exception("Файл пустой.")
@@ -265,24 +231,14 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         if not file_token:
             raise Exception("Не удалось получить токен от MAX.")
 
-        time.sleep(2)
+        # Ждём, чтобы MAX обработал видео
+        print("Ждём 10 секунд, пока MAX обработает видео...")
+        time.sleep(10)
 
-        video_payload = {
-            "text": f"🎬 Готово! ({resolution}p)",
-            "attachments": [
-                {"type": "video", "payload": {"token": file_token}}
-            ]
-        }
-
-        res = requests.post(
-            f"{BASE_URL}/messages",
-            headers=HEADERS,
-            params=target_params,
-            json=video_payload,
-            verify=False,
-            timeout=15
-        )
-        print(f"Отправка видео: {res.status_code} — {res.text[:200]}")
+        # Пытаемся отправить с повторами
+        success = send_video_to_max_with_retry(target_params, resolution, file_token)
+        if not success:
+            raise Exception("MAX не смог обработать видео.")
 
     except Exception as e:
         print(f"❌ Ошибка: {e}")
@@ -330,18 +286,15 @@ def main():
 
                 updates = data.get("updates", [])
                 for update in updates:
-                    update_key = (
-                        update.get("message", {}).get("body", {}).get("mid") or
-                        update.get("message", {}).get("message_id") or
-                        update.get("callback", {}).get("callback_id") or
-                        str(update)
-                    )
-                    if update_key in processed_updates:
+                    # ===== ЗАЩИТА ОТ ДУБЛЕЙ =====
+                    # 1. Проверяем ID апдейта
+                    update_id = update.get("update_id") or update.get("id")
+                    if update_id and update_id in processed_updates:
                         continue
-                    processed_updates.add(update_key)
-
-                    if len(processed_updates) > 500:
-                        processed_updates.clear()
+                    if update_id:
+                        processed_updates.add(update_id)
+                        if len(processed_updates) > 1000:
+                            processed_updates.clear()
 
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
@@ -351,6 +304,16 @@ def main():
                             callback = update
 
                         callback_id = callback.get("callback_id")
+
+                        # Защита от дублей колбэков
+                        if callback_id and callback_id in processed_callbacks:
+                            print(f"Дубль колбэка {callback_id} пропущен")
+                            continue
+                        if callback_id:
+                            processed_callbacks.add(callback_id)
+                            if len(processed_callbacks) > 1000:
+                                processed_callbacks.clear()
+
                         data_payload = callback.get("payload", "")
                         message = update.get("message", {})
 
@@ -382,12 +345,24 @@ def main():
 
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
+
+                        # Защита от дублей сообщений — по mid
+                        body = msg.get("body", {})
+                        mid = body.get("mid") or msg.get("message_id") or msg.get("id")
+
+                        if mid and mid in processed_message_ids:
+                            print(f"Дубль сообщения {mid} пропущен")
+                            continue
+                        if mid:
+                            processed_message_ids.add(mid)
+                            if len(processed_message_ids) > 1000:
+                                processed_message_ids.clear()
+
                         user_id = (
                             msg.get("sender", {}).get("user_id") or
                             msg.get("from", {}).get("id") or
                             msg.get("user_id")
                         )
-                        body = msg.get("body", {})
                         text = body.get("text") or msg.get("text", "")
 
                         if user_id and text and "http" in text:
