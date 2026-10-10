@@ -5,13 +5,16 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# ========== НАСТРОЙКИ ==========
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
+COBALT_URL = "https://ТВОЙ-ПРОЕКТ.up.railway.app/"  # <-- ЗАМЕНИМ ПОЗЖЕ!
 BASE_URL = "https://botapi.max.ru"
 
 HEADERS = {
     "Authorization": TOKEN,
     "Content-Type": "application/json"
 }
+
 
 def send_message_with_qualities(user_id, video_url):
     try:
@@ -40,17 +43,19 @@ def send_message_with_qualities(user_id, video_url):
     except Exception as e:
         print(f"Ошибка отправки меню качества: {e}")
 
+
 def answer_callback(callback_id):
     try:
         requests.post(
-            f"{BASE_URL}/answers", 
-            headers=HEADERS, 
-            json={"callback_id": callback_id}, 
-            verify=False, 
+            f"{BASE_URL}/answers",
+            headers=HEADERS,
+            json={"callback_id": callback_id},
+            verify=False,
             timeout=10
         )
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
+
 
 def upload_video_to_max(video_path):
     try:
@@ -60,120 +65,128 @@ def upload_video_to_max(video_path):
             "Accept": "application/json",
             "Authorization": TOKEN
         }
-        
+
         res1 = requests.post(step1_url, params=params, headers=step1_headers, verify=False, timeout=15)
         if res1.status_code != 200:
+            print(f"Ошибка получения upload URL: {res1.status_code} — {res1.text}")
             return None
-            
+
         data1 = res1.json()
         upload_url = data1.get("url")
         file_token = data1.get("token")
-        
+
         if not upload_url:
             return None
-            
+
         with open(video_path, 'rb') as f:
-            files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
+            files = {'data': (os.path.basename(video_path), f, 'video/mp4')}
             res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
-            
+
         if res2.status_code != 200:
             with open(video_path, 'rb') as f:
-                files = {'data': f}
+                files = {'file': f}
                 res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
-            
+
         if res2.status_code == 200:
-            return file_token
+            try:
+                resp_data = res2.json()
+                return resp_data.get("token") or file_token
+            except:
+                return file_token
         else:
+            print(f"Ошибка загрузки: {res2.status_code} — {res2.text}")
             return None
     except Exception as e:
         print(f"Ошибка загрузки в MAX: {e}")
         return None
 
+
 def download_via_cobalt(video_url, resolution):
-    """Используем публичный Cobalt API для обхода блокировок YouTube"""
-    cobalt_api_url = "https://api.cobalt.tools/api/json"
-    
+    """Запрос к СВОЕМУ Cobalt API на Railway (YouTube, VK, TikTok)."""
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
-    
+
     payload = {
         "url": video_url,
         "videoQuality": str(resolution),
-        "filenamePattern": "basic"
+        "downloadMode": "auto",
+        "filenameStyle": "basic"
     }
-    
+
     try:
-        response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=30)
+        print(f"Запрос к Cobalt: {COBALT_URL}")
+        response = requests.post(COBALT_URL, json=payload, headers=headers, timeout=60)
+        print(f"Ответ Cobalt: {response.status_code}")
+
         if response.status_code == 200:
             data = response.json()
             status = data.get("status")
-            
-            if status == "redirect" or status == "stream":
+            print(f"Статус Cobalt: {status}")
+
+            if status in ("tunnel", "redirect"):
                 return data.get("url")
             elif status == "picker":
-                # Если доступно несколько вариантов, берем первый из списка
                 picker = data.get("picker", [])
                 if picker:
                     return picker[0].get("url")
-        print(f"Ошибка Cobalt API: {response.text}")
+            elif status == "error":
+                print(f"Cobalt ошибка: {data.get('error', {})}")
+                return None
+
+        print(f"Ошибка Cobalt: {response.status_code} — {response.text[:300]}")
     except Exception as e:
-        print(f"Исключение при запросе к Cobalt: {e}")
+        print(f"Исключение Cobalt: {e}")
+
     return None
+
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
     temp_filename = f"temp_{int(time.time())}.mp4"
-    
+
     try:
         requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
             params=target_params,
-            json={"text": f"⏳ Получаю ссылку через Cobalt API ({resolution}p)..."},
+            json={"text": f"⏳ Скачиваю видео ({resolution}p)..."},
             verify=False,
             timeout=15
         )
-        
-        # Получаем прямую ссылку на файл через Cobalt
+
         direct_download_link = download_via_cobalt(video_url, resolution)
-        
         if not direct_download_link:
             raise Exception("Не удалось получить ссылку на видео от Cobalt API.")
-            
-        # Скачиваем файл на сервер во временный файл
-        print(f"Скачивание файла с потока...")
-        file_res = requests.get(direct_download_link, stream=True, timeout=120)
+
+        print(f"Скачивание файла...")
+        file_res = requests.get(direct_download_link, stream=True, timeout=180)
         if file_res.status_code == 200:
             with open(temp_filename, 'wb') as f:
                 for chunk in file_res.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
         else:
-            raise Exception(f"Ошибка скачивания файла по прямой ссылке: {file_res.status_code}")
-            
+            raise Exception(f"Ошибка скачивания: {file_res.status_code}")
+
         if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
-            raise Exception("Скачанный файл пустой или не сохранился.")
-            
-        print(f"Видео скачано, загружаем в MAX...")
+            raise Exception("Скачанный файл пустой.")
+
+        print(f"Видео скачано ({os.path.getsize(temp_filename)} байт), загружаю в MAX...")
         file_token = upload_video_to_max(temp_filename)
-        
         if not file_token:
-            raise Exception("Не удалось получить токен загруженного файла от сервера MAX.")
-            
+            raise Exception("Не удалось получить токен файла от MAX.")
+
+        time.sleep(2)
+
         video_payload = {
             "text": f"🎬 Готово! ({resolution}p)",
             "attachments": [
-                {
-                    "type": "video",
-                    "payload": {
-                        "token": file_token
-                    }
-                }
+                {"type": "video", "payload": {"token": file_token}}
             ]
         }
-        
-        requests.post(
+
+        res = requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
             params=target_params,
@@ -181,15 +194,8 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             verify=False,
             timeout=15
         )
+        print(f"Отправка видео: {res.status_code} — {res.text[:200]}")
 
-        if message_id:
-            try:
-                edit_params = target_params.copy()
-                edit_params["message_id"] = message_id
-                requests.delete(f"{BASE_URL}/messages", headers=HEADERS, params=edit_params, verify=False, timeout=10)
-            except:
-                pass
-                
     except Exception as e:
         print(f"❌ Ошибка: {e}")
         try:
@@ -197,19 +203,19 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 f"{BASE_URL}/messages",
                 headers=HEADERS,
                 params=target_params,
-                json={"text": f"❌ Ошибка при обработке видео: {e}"},
+                json={"text": f"❌ Ошибка: {e}"},
                 verify=False,
                 timeout=15
             )
         except:
             pass
-            
     finally:
         if os.path.exists(temp_filename):
             try:
                 os.remove(temp_filename)
             except:
                 pass
+
 
 def main():
     print("Бот для MAX запущен!")
@@ -220,47 +226,46 @@ def main():
             params = {'timeout': 30}
             if current_marker:
                 params['marker'] = current_marker
-                
+
             response = requests.get(
-                f"{BASE_URL}/updates", 
-                headers=HEADERS, 
+                f"{BASE_URL}/updates",
+                headers=HEADERS,
                 params=params,
                 verify=False,
                 timeout=45
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 if "marker" in data:
                     current_marker = data["marker"]
-                
+
                 updates = data.get("updates", [])
                 for update in updates:
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
-                    
+
                     if event_type == "message_callback" or callback:
                         if not callback and "callback_id" in update:
                             callback = update
-                            
+
                         callback_id = callback.get("callback_id")
                         data_payload = callback.get("payload", "")
                         message = update.get("message", {})
-                        
+
                         chat_id = message.get("chat_id") or update.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
-                        
                         msg_id = (
-                            message.get("message_id") or 
-                            message.get("body", {}).get("message_id") or 
+                            message.get("message_id") or
+                            message.get("body", {}).get("message_id") or
                             callback.get("message_id") or
                             update.get("message_id") or
                             update.get("message_callback", {}).get("message_id")
                         )
-                        
+
                         if callback_id:
                             answer_callback(callback_id)
-                            
+
                         if chat_id is None or chat_id == 0 or chat_id == "0":
                             if user_id:
                                 target_params = {"user_id": int(user_id)}
@@ -268,7 +273,7 @@ def main():
                                 continue
                         else:
                             target_params = {"chat_id": chat_id}
-                        
+
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
                             download_and_send_video(target_params, int(res_str), video_url, msg_id)
@@ -281,10 +286,9 @@ def main():
                             msg.get("from", {}).get("id") or
                             msg.get("user_id")
                         )
-                        
                         body = msg.get("body", {})
                         text = body.get("text") or msg.get("text", "")
-                        
+
                         if user_id and text and "http" in text:
                             words = text.split()
                             url = next((w for w in words if w.startswith("http")), text)
@@ -294,6 +298,7 @@ def main():
         except Exception as e:
             print(f"Ошибка в цикле обновлений: {e}")
             time.sleep(5)
+
 
 if __name__ == '__main__':
     main()
