@@ -3,6 +3,7 @@ import re
 import time
 import requests
 import urllib3
+import yt_dlp
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -22,31 +23,30 @@ def clean_url(url):
     """Приводим ссылки YouTube/VK/TikTok к правильному виду."""
     url = url.strip().rstrip('.,;!?)')
 
-    # youtu.be -> youtube.com/watch
     if "youtu.be/" in url:
         vid = url.split("youtu.be/")[1].split("?")[0].split("&")[0]
         return f"https://www.youtube.com/watch?v={vid}"
 
-    # youtube.com/shorts/ -> youtube.com/watch
     if "youtube.com/shorts/" in url:
         vid = url.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0].split("/")[0]
         return f"https://www.youtube.com/watch?v={vid}"
 
-    # youtube.com/watch?v=XXX&si=... -> только v=
     if "youtube.com/watch" in url:
         m = re.search(r"[?&]v=([a-zA-Z0-9_-]+)", url)
         if m:
             return f"https://www.youtube.com/watch?v={m.group(1)}"
 
-    # VK: убираем лишние параметры
     if "vk.com/" in url or "vkvideo.ru/" in url:
         return url.split("?")[0]
 
-    # TikTok: убираем параметры после ?
     if "tiktok.com/" in url:
         return url.split("?")[0]
 
     return url
+
+
+def is_youtube(url):
+    return "youtube.com" in url or "youtu.be" in url
 
 
 def send_message_with_qualities(user_id, video_url):
@@ -135,15 +135,12 @@ def upload_video_to_max(video_path):
 
 
 def download_via_cobalt(video_url, resolution):
+    """Для VK, TikTok и других сервисов — через Cobalt."""
     clean = clean_url(video_url)
-    print(f"Оригинальная ссылка: {video_url}")
-    print(f"Очищенная ссылка: {clean}")
+    print(f"[Cobalt] Оригинал: {video_url}")
+    print(f"[Cobalt] Очищенная: {clean}")
 
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
     payload = {
         "url": clean,
         "videoQuality": str(resolution),
@@ -152,15 +149,13 @@ def download_via_cobalt(video_url, resolution):
     }
 
     try:
-        print(f"Запрос к Cobalt: {COBALT_URL}")
         response = requests.post(COBALT_URL, json=payload, headers=headers, timeout=60)
-        print(f"Ответ Cobalt: {response.status_code}")
-        print(f"Тело: {response.text[:500]}")
+        print(f"[Cobalt] Ответ: {response.status_code}")
 
         if response.status_code == 200:
             data = response.json()
             status = data.get("status")
-            print(f"Статус: {status}")
+            print(f"[Cobalt] Статус: {status}")
 
             if status in ("tunnel", "redirect"):
                 return data.get("url")
@@ -169,12 +164,54 @@ def download_via_cobalt(video_url, resolution):
                 if picker:
                     return picker[0].get("url")
             elif status == "error":
-                print(f"Cobalt ошибка: {data.get('error', {})}")
+                print(f"[Cobalt] Ошибка: {data.get('error', {})}")
                 return None
 
-        print(f"Ошибка Cobalt: {response.status_code} — {response.text[:300]}")
+        print(f"[Cobalt] Плохой ответ: {response.status_code} — {response.text[:300]}")
     except Exception as e:
-        print(f"Исключение Cobalt: {e}")
+        print(f"[Cobalt] Исключение: {e}")
+
+    return None
+
+
+def download_via_ytdlp(video_url, resolution, output_path):
+    """Для YouTube — через yt-dlp напрямую."""
+    clean = clean_url(video_url)
+    print(f"[yt-dlp] Оригинал: {video_url}")
+    print(f"[yt-dlp] Очищенная: {clean}")
+
+    # Формат: лучший mp4 с указанным разрешением или ниже
+    fmt = (
+        f"bestvideo[height<={resolution}][ext=mp4]+bestaudio[ext=m4a]"
+        f"/best[height<={resolution}][ext=mp4]"
+        f"/best[height<={resolution}]/best"
+    )
+
+    ydl_opts = {
+        'format': fmt,
+        'outtmpl': output_path,
+        'merge_output_format': 'mp4',
+        'quiet': False,
+        'no_warnings': False,
+        'nocheckcertificate': True,
+        'geo_bypass': True,
+        'noprogress': True,
+        'http_headers': {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            )
+        }
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([clean])
+        if os.path.exists(output_path):
+            return output_path
+    except Exception as e:
+        print(f"[yt-dlp] Ошибка: {e}")
 
     return None
 
@@ -192,19 +229,33 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             timeout=15
         )
 
-        direct_download_link = download_via_cobalt(video_url, resolution)
-        if not direct_download_link:
-            raise Exception("Не удалось получить ссылку от Cobalt.")
-
-        print(f"Скачивание файла...")
-        file_res = requests.get(direct_download_link, stream=True, timeout=180)
-        if file_res.status_code == 200:
-            with open(temp_filename, 'wb') as f:
-                for chunk in file_res.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+        if is_youtube(video_url):
+            print("Определён YouTube → используем yt-dlp")
+            result_path = download_via_ytdlp(video_url, resolution, temp_filename)
+            if not result_path:
+                # Фолбэк на Cobalt, если yt-dlp не справился
+                print("yt-dlp не справился, пробуем Cobalt...")
+                direct = download_via_cobalt(video_url, resolution)
+                if not direct:
+                    raise Exception("Не удалось скачать видео с YouTube.")
+                file_res = requests.get(direct, stream=True, timeout=180)
+                with open(temp_filename, 'wb') as f:
+                    for chunk in file_res.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
         else:
-            raise Exception(f"Ошибка скачивания: {file_res.status_code}")
+            print("Определён VK/TikTok → используем Cobalt")
+            direct = download_via_cobalt(video_url, resolution)
+            if not direct:
+                raise Exception("Не удалось получить ссылку от Cobalt.")
+            file_res = requests.get(direct, stream=True, timeout=180)
+            if file_res.status_code == 200:
+                with open(temp_filename, 'wb') as f:
+                    for chunk in file_res.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+            else:
+                raise Exception(f"Ошибка скачивания: {file_res.status_code}")
 
         if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
             raise Exception("Файл пустой.")
