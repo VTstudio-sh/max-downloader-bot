@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import requests
 import urllib3
@@ -13,6 +14,39 @@ HEADERS = {
     "Authorization": TOKEN,
     "Content-Type": "application/json"
 }
+
+processed_updates = set()
+
+
+def clean_url(url):
+    """Приводим ссылки YouTube/VK/TikTok к правильному виду."""
+    url = url.strip().rstrip('.,;!?)')
+
+    # youtu.be -> youtube.com/watch
+    if "youtu.be/" in url:
+        vid = url.split("youtu.be/")[1].split("?")[0].split("&")[0]
+        return f"https://www.youtube.com/watch?v={vid}"
+
+    # youtube.com/shorts/ -> youtube.com/watch
+    if "youtube.com/shorts/" in url:
+        vid = url.split("youtube.com/shorts/")[1].split("?")[0].split("&")[0].split("/")[0]
+        return f"https://www.youtube.com/watch?v={vid}"
+
+    # youtube.com/watch?v=XXX&si=... -> только v=
+    if "youtube.com/watch" in url:
+        m = re.search(r"[?&]v=([a-zA-Z0-9_-]+)", url)
+        if m:
+            return f"https://www.youtube.com/watch?v={m.group(1)}"
+
+    # VK: убираем лишние параметры
+    if "vk.com/" in url or "vkvideo.ru/" in url:
+        return url.split("?")[0]
+
+    # TikTok: убираем параметры после ?
+    if "tiktok.com/" in url:
+        return url.split("?")[0]
+
+    return url
 
 
 def send_message_with_qualities(user_id, video_url):
@@ -101,13 +135,17 @@ def upload_video_to_max(video_path):
 
 
 def download_via_cobalt(video_url, resolution):
+    clean = clean_url(video_url)
+    print(f"Оригинальная ссылка: {video_url}")
+    print(f"Очищенная ссылка: {clean}")
+
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
 
     payload = {
-        "url": video_url,
+        "url": clean,
         "videoQuality": str(resolution),
         "downloadMode": "auto",
         "filenameStyle": "basic"
@@ -117,11 +155,12 @@ def download_via_cobalt(video_url, resolution):
         print(f"Запрос к Cobalt: {COBALT_URL}")
         response = requests.post(COBALT_URL, json=payload, headers=headers, timeout=60)
         print(f"Ответ Cobalt: {response.status_code}")
+        print(f"Тело: {response.text[:500]}")
 
         if response.status_code == 200:
             data = response.json()
             status = data.get("status")
-            print(f"Статус Cobalt: {status}")
+            print(f"Статус: {status}")
 
             if status in ("tunnel", "redirect"):
                 return data.get("url")
@@ -240,6 +279,19 @@ def main():
 
                 updates = data.get("updates", [])
                 for update in updates:
+                    update_key = (
+                        update.get("message", {}).get("body", {}).get("mid") or
+                        update.get("message", {}).get("message_id") or
+                        update.get("callback", {}).get("callback_id") or
+                        str(update)
+                    )
+                    if update_key in processed_updates:
+                        continue
+                    processed_updates.add(update_key)
+
+                    if len(processed_updates) > 500:
+                        processed_updates.clear()
+
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
 
@@ -290,6 +342,7 @@ def main():
                         if user_id and text and "http" in text:
                             words = text.split()
                             url = next((w for w in words if w.startswith("http")), text)
+                            url = clean_url(url)
                             send_message_with_qualities(int(user_id), url)
             else:
                 time.sleep(5)
