@@ -1,11 +1,14 @@
 import os
 import time
+import json
 import requests
 import urllib3
 import yt_dlp
+import threading
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Токен вставлен
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://botapi.max.ru"
 
@@ -14,17 +17,29 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Глобальное множество для предотвращения обработки дублирующихся update_id
-processed_updates = set()
-last_action_time = {}
+STATE_FILE = "state.json"
+
+# Блокировка для предотвращения одновременного скачивания одного и того же видео
+download_locks = {}
+lock_mutex = threading.Lock()
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {"marker": None}
+
+def save_state(marker):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump({"marker": marker}, f)
+    except Exception as e:
+        print(f"Ошибка сохранения состояния: {e}")
 
 def send_message_with_qualities(user_id, video_url):
-    current_time = time.time()
-    key = f"{user_id}_{video_url}"
-    if key in last_action_time and current_time - last_action_time[key] < 5:
-        return
-    last_action_time[key] = current_time
-
     try:
         params = {"user_id": user_id}
         data = {
@@ -103,7 +118,15 @@ def upload_video_to_max(video_path):
         return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
-    temp_filename = f"temp_{int(time.time())}.mp4"
+    lock_key = f"{video_url}_{resolution}"
+    with lock_mutex:
+        if lock_key in download_locks and download_locks[lock_key].is_alive():
+            print(f"Видео {lock_key} уже скачивается. Игнорируем дубль.")
+            return
+        event = threading.Event()
+        download_locks[lock_key] = event
+
+    temp_filename = f"temp_{int(time.time())}_{resolution}.mp4"
     
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
@@ -186,12 +209,19 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 os.remove(temp_filename)
             except:
                 pass
+        
+        with lock_mutex:
+            if lock_key in download_locks:
+                del download_locks[lock_key]
 
 def main():
     print("Бот запущен с жесткой фильтрацией дублей!")
-    current_marker = None
-    global processed_updates
-
+    
+    state = load_state()
+    current_marker = state.get("marker")
+    
+    processed_updates = set()
+    
     while True:
         try:
             params = {'timeout': 30}
@@ -208,21 +238,20 @@ def main():
             
             if response.status_code == 200:
                 data = response.json()
-                if "marker" in data:
-                    current_marker = data["marker"]
                 
+                new_marker = data.get("marker")
                 updates = data.get("updates", [])
                 
-                # Очищаем кэш старых апдейтов, чтобы не переполнять память
                 if len(processed_updates) > 2000:
                     processed_updates.clear()
 
                 for update in updates:
-                    # Пытаемся вытащить уникальный идентификатор события
-                    up_id = update.get("update_id") or update.get("id")
+                    up_id = update.get("update_id") or update.get("id") or update.get("timestamp")
+                    
                     if not up_id:
-                        # Если ID нет, генерируем уникальный слепок по содержимому
-                        up_id = str(update)
+                        msg_text = str(update.get("message", {}).get("body", {}).get("text", ""))
+                        user_id = str(update.get("user_id", ""))
+                        up_id = hash(msg_text + user_id)
                     
                     if up_id in processed_updates:
                         continue
@@ -263,7 +292,11 @@ def main():
                         
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            download_and_send_video(target_params, int(res_str), video_url, msg_id)
+                            
+                            threading.Thread(
+                                target=download_and_send_video, 
+                                args=(target_params, int(res_str), video_url, msg_id)
+                            ).start()
                         continue
 
                     if event_type == "message_created" or "message" in update:
@@ -281,6 +314,10 @@ def main():
                             words = text.split()
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
+
+                if new_marker:
+                    current_marker = new_marker
+                    save_state(current_marker)
             else:
                 time.sleep(3)
         except Exception as e:
