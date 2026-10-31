@@ -14,16 +14,17 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Словарь для защиты от повторной отправки меню по той же ссылке (храним время последнего запроса)
-last_requests = {}
+# Кэш для защиты от спама и дублей (храним комбинацию user_id + text и время)
+sent_messages_cache = {}
 
 def send_message_with_qualities(user_id, video_url):
     current_time = time.time()
-    # Защита: если для этого юзера такая ссылка приходила менее чем 5 секунд назад — игнорируем
-    key = f"{user_id}_{video_url}"
-    if key in last_requests and current_time - last_requests[key] < 5:
+    cache_key = f"{user_id}_{video_url}"
+    
+    # Если такое же сообщение этому пользователю отправлялось меньше чем 10 секунд назад — пропускаем
+    if cache_key in sent_messages_cache and current_time - sent_messages_cache[cache_key] < 10:
         return
-    last_requests[key] = current_time
+    sent_messages_cache[cache_key] = current_time
 
     try:
         params = {"user_id": user_id}
@@ -188,7 +189,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот для MAX запущен без дублей!")
+    print("Бот для MAX запущен с усиленной защитой от дублей!")
     current_marker = None
     processed_callbacks = set()
 
@@ -213,7 +214,6 @@ def main():
                 
                 updates = data.get("updates", [])
                 
-                # Очищаем старые кэшированные callback_id чтобы не забивать память
                 if len(processed_callbacks) > 500:
                     processed_callbacks.clear()
 
@@ -221,13 +221,12 @@ def main():
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
+                    # Обработка нажатий на кнопки качества
                     if event_type == "message_callback" or callback:
                         if not callback and "callback_id" in update:
                             callback = update
                             
                         callback_id = callback.get("callback_id")
-                        
-                        # Защита от повторного нажатия одной и той же кнопки
                         if callback_id in processed_callbacks:
                             continue
                         if callback_id:
@@ -261,6 +260,7 @@ def main():
                             download_and_send_video(target_params, int(res_str), video_url, msg_id)
                         continue
 
+                    # Обработка новых текстовых сообщений со ссылками
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
                         user_id = (
