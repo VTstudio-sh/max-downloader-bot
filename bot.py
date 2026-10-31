@@ -5,10 +5,11 @@ import requests
 import urllib3
 import yt_dlp
 import threading
+import hashlib
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Токен вставлен
+# ВАШ ТОКЕН
 TOKEN = "f9LHodD0cOKUGzWblFvIN7u9vshHsp6jWb8TCzfs1wUyXA5CRWycHvLc03Lm9Twzj24NqrDCe1DXTR-2u7hd"
 BASE_URL = "https://botapi.max.ru"
 
@@ -17,9 +18,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Файл для сохранения позиции (маркера), чтобы бот не дублировал при перезапусках
 STATE_FILE = "state.json"
 
-# Блокировка для предотвращения одновременного скачивания одного и того же видео
+# Глобальные блокировки для скачивания
 download_locks = {}
 lock_mutex = threading.Lock()
 
@@ -118,13 +120,13 @@ def upload_video_to_max(video_path):
         return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
+    # Защита от двойного клика по кнопке
     lock_key = f"{video_url}_{resolution}"
     with lock_mutex:
         if lock_key in download_locks and download_locks[lock_key].is_alive():
             print(f"Видео {lock_key} уже скачивается. Игнорируем дубль.")
             return
-        event = threading.Event()
-        download_locks[lock_key] = event
+        download_locks[lock_key] = threading.Event()
 
     temp_filename = f"temp_{int(time.time())}_{resolution}.mp4"
     
@@ -181,6 +183,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             timeout=15
         )
 
+        # Удаляем сообщение "Скачиваю..."
         if message_id:
             try:
                 edit_params = target_params.copy()
@@ -215,12 +218,13 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 del download_locks[lock_key]
 
 def main():
-    print("Бот запущен с жесткой фильтрацией дублей!")
+    print("Бот запущен! Используется надежная фильтрация по ID сообщений.")
     
     state = load_state()
     current_marker = state.get("marker")
     
-    processed_updates = set()
+    # Хранилище уже обработанных ID (mid и callback_id)
+    processed_ids = set()
     
     while True:
         try:
@@ -238,34 +242,30 @@ def main():
             
             if response.status_code == 200:
                 data = response.json()
-                
                 new_marker = data.get("marker")
                 updates = data.get("updates", [])
                 
-                if len(processed_updates) > 2000:
-                    processed_updates.clear()
+                # Очистка кэша памяти, чтобы не переполнялась
+                if len(processed_ids) > 5000:
+                    processed_ids.clear()
 
                 for update in updates:
-                    up_id = update.get("update_id") or update.get("id") or update.get("timestamp")
-                    
-                    if not up_id:
-                        msg_text = str(update.get("message", {}).get("body", {}).get("text", ""))
-                        user_id = str(update.get("user_id", ""))
-                        up_id = hash(msg_text + user_id)
-                    
-                    if up_id in processed_updates:
-                        continue
-                    processed_updates.add(up_id)
-
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
+                    # === БЛОК ОБРАБОТКИ КНОПОК (CALLBACK) ===
                     if event_type == "message_callback" or callback:
                         if not callback and "callback_id" in update:
                             callback = update
                             
                         callback_id = callback.get("callback_id")
+                        
+                        # ЖЕСТКАЯ ПРОВЕРКА: если этот callback_id уже был, игнорируем
                         if callback_id:
+                            if callback_id in processed_ids:
+                                print(f"Дубль кнопки {callback_id} проигнорирован.")
+                                continue
+                            processed_ids.add(callback_id)
                             answer_callback(callback_id)
                             
                         data_payload = callback.get("payload", "")
@@ -293,21 +293,39 @@ def main():
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
                             
+                            # Запускаем в отдельном потоке
                             threading.Thread(
                                 target=download_and_send_video, 
                                 args=(target_params, int(res_str), video_url, msg_id)
                             ).start()
                         continue
 
+                    # === БЛОК ОБРАБОТКИ ТЕКСТОВЫХ СООБЩЕНИЙ ===
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
+                        
+                        # Ищем уникальный ID сообщения (mid) внутри тела
+                        body = msg.get("body", {})
+                        mid = body.get("mid") or msg.get("mid")
+                        
+                        # Если нет mid, генерируем уникальный хэш из текста и юзера
+                        if not mid:
+                            text_for_hash = body.get("text", "")
+                            user_for_hash = str(msg.get("sender", {}).get("user_id", ""))
+                            mid = hashlib.md5((text_for_hash + user_for_hash).encode()).hexdigest()
+                        
+                        # ЖЕСТКАЯ ПРОВЕРКА: если такое сообщение уже было, игнорируем
+                        if mid in processed_ids:
+                            print(f"Дубль сообщения {mid} проигнорирован.")
+                            continue
+                        processed_ids.add(mid)
+
                         user_id = (
                             msg.get("sender", {}).get("user_id") or
                             msg.get("from", {}).get("id") or
                             msg.get("user_id")
                         )
                         
-                        body = msg.get("body", {})
                         text = body.get("text") or msg.get("text", "")
                         
                         if user_id and text and "http" in text:
@@ -315,6 +333,7 @@ def main():
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
 
+                # Сохраняем маркер только после обработки
                 if new_marker:
                     current_marker = new_marker
                     save_state(current_marker)
