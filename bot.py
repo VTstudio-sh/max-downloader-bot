@@ -5,7 +5,6 @@ import requests
 import urllib3
 import yt_dlp
 import threading
-import hashlib
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -18,12 +17,39 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Файл для сохранения позиции (маркера), чтобы бот не дублировал при перезапусках
 STATE_FILE = "state.json"
 
-# Глобальные блокировки для скачивания
+# Блокировки для скачивания
 download_locks = {}
 lock_mutex = threading.Lock()
+
+# --- НОВАЯ СИСТЕМА ЗАЩИТЫ ОТ ДУБЛЕЙ ---
+# Словарь, где ключ - это уникальный отпечаток события, а значение - время, когда мы его обработали
+recent_events = {}
+dedup_lock = threading.Lock()
+
+def is_duplicate(event_key, cooldown_seconds=5):
+    """
+    Проверяет, было ли это событие недавно.
+    Если событие пришло повторно в течение cooldown_seconds, возвращает True.
+    """
+    current_time = time.time()
+    with dedup_lock:
+        # Очищаем старые записи, чтобы память не переполнялась
+        if len(recent_events) > 1000:
+            keys_to_delete = [k for k, v in recent_events.items() if current_time - v > 60]
+            for k in keys_to_delete:
+                del recent_events[k]
+
+        # Если ключ есть и прошло меньше cooldown_seconds - это дубль
+        if event_key in recent_events:
+            if current_time - recent_events[event_key] < cooldown_seconds:
+                return True
+        
+        # Обновляем время последнего события
+        recent_events[event_key] = current_time
+        return False
+# --------------------------------------
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -120,7 +146,6 @@ def upload_video_to_max(video_path):
         return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
-    # Защита от двойного клика по кнопке
     lock_key = f"{video_url}_{resolution}"
     with lock_mutex:
         if lock_key in download_locks and download_locks[lock_key].is_alive():
@@ -183,7 +208,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             timeout=15
         )
 
-        # Удаляем сообщение "Скачиваю..."
         if message_id:
             try:
                 edit_params = target_params.copy()
@@ -218,13 +242,10 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 del download_locks[lock_key]
 
 def main():
-    print("Бот запущен! Используется надежная фильтрация по ID сообщений.")
+    print("Бот запущен! Включена временная защита от дублей (Time-Based Deduplication).")
     
     state = load_state()
     current_marker = state.get("marker")
-    
-    # Хранилище уже обработанных ID (mid и callback_id)
-    processed_ids = set()
     
     while True:
         try:
@@ -245,10 +266,6 @@ def main():
                 new_marker = data.get("marker")
                 updates = data.get("updates", [])
                 
-                # Очистка кэша памяти, чтобы не переполнялась
-                if len(processed_ids) > 5000:
-                    processed_ids.clear()
-
                 for update in updates:
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
@@ -259,20 +276,24 @@ def main():
                             callback = update
                             
                         callback_id = callback.get("callback_id")
-                        
-                        # ЖЕСТКАЯ ПРОВЕРКА: если этот callback_id уже был, игнорируем
-                        if callback_id:
-                            if callback_id in processed_ids:
-                                print(f"Дубль кнопки {callback_id} проигнорирован.")
-                                continue
-                            processed_ids.add(callback_id)
-                            answer_callback(callback_id)
-                            
                         data_payload = callback.get("payload", "")
                         message = update.get("message", {})
                         
                         chat_id = message.get("chat_id") or update.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
+                        
+                        # Создаем уникальный ключ для кнопки: пользователь + payload (качество и ссылка)
+                        event_key = f"cb_{user_id}_{data_payload}"
+                        
+                        # Если этот же пользователь нажал эту же кнопку менее 5 секунд назад - игнорируем
+                        if is_duplicate(event_key, cooldown_seconds=5):
+                            print(f"Дубль кнопки от {user_id} проигнорирован.")
+                            if callback_id:
+                                answer_callback(callback_id) # Обязательно отвечаем на дубль, чтобы убрать часики
+                            continue
+                            
+                        if callback_id:
+                            answer_callback(callback_id)
                         
                         msg_id = (
                             message.get("message_id") or 
@@ -292,8 +313,6 @@ def main():
                         
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            
-                            # Запускаем в отдельном потоке
                             threading.Thread(
                                 target=download_and_send_video, 
                                 args=(target_params, int(res_str), video_url, msg_id)
@@ -303,23 +322,8 @@ def main():
                     # === БЛОК ОБРАБОТКИ ТЕКСТОВЫХ СООБЩЕНИЙ ===
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
-                        
-                        # Ищем уникальный ID сообщения (mid) внутри тела
                         body = msg.get("body", {})
-                        mid = body.get("mid") or msg.get("mid")
                         
-                        # Если нет mid, генерируем уникальный хэш из текста и юзера
-                        if not mid:
-                            text_for_hash = body.get("text", "")
-                            user_for_hash = str(msg.get("sender", {}).get("user_id", ""))
-                            mid = hashlib.md5((text_for_hash + user_for_hash).encode()).hexdigest()
-                        
-                        # ЖЕСТКАЯ ПРОВЕРКА: если такое сообщение уже было, игнорируем
-                        if mid in processed_ids:
-                            print(f"Дубль сообщения {mid} проигнорирован.")
-                            continue
-                        processed_ids.add(mid)
-
                         user_id = (
                             msg.get("sender", {}).get("user_id") or
                             msg.get("from", {}).get("id") or
@@ -329,11 +333,18 @@ def main():
                         text = body.get("text") or msg.get("text", "")
                         
                         if user_id and text and "http" in text:
+                            # Создаем уникальный ключ для текста: пользователь + сам текст
+                            event_key = f"msg_{user_id}_{text}"
+                            
+                            # Если этот же пользователь отправил этот же текст менее 5 секунд назад - игнорируем
+                            if is_duplicate(event_key, cooldown_seconds=5):
+                                print(f"Дубль сообщения от {user_id} проигнорирован.")
+                                continue
+                                
                             words = text.split()
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
 
-                # Сохраняем маркер только после обработки
                 if new_marker:
                     current_marker = new_marker
                     save_state(current_marker)
