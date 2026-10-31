@@ -14,16 +14,13 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Словарь для защиты от дублей от платформы (хранит время последнего запроса от пользователя)
 user_last_click = {}
 
 def send_message_with_qualities(user_id, video_url):
     current_time = time.time()
     cache_key = f"{user_id}_{video_url}"
     
-    # Жесткая защита: если от этого пользователя за последние 10 секунд уже приходило меню для этой ссылки — игнорируем дубль
     if cache_key in user_last_click and current_time - user_last_click[cache_key] < 10:
-        print(🛡️ Обнаружен дубль от сервера MAX, игнорируем...)
         return
     user_last_click[cache_key] = current_time
 
@@ -113,7 +110,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
     }
     
     try:
-        # Предупреждаем пользователя, что для длинных видео нужно время
         requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
@@ -186,7 +182,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот запущен с защитой от дублей со стороны платформы!")
+    print("Bot started successfully!")
     current_marker = None
     processed_callbacks = set()
 
