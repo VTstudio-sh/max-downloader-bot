@@ -14,17 +14,16 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Кэш для защиты от спама и дублей (храним комбинацию user_id + text и время)
-sent_messages_cache = {}
+# Глобальное множество для предотвращения обработки дублирующихся update_id
+processed_updates = set()
+last_action_time = {}
 
 def send_message_with_qualities(user_id, video_url):
     current_time = time.time()
-    cache_key = f"{user_id}_{video_url}"
-    
-    # Если такое же сообщение этому пользователю отправлялось меньше чем 10 секунд назад — пропускаем
-    if cache_key in sent_messages_cache and current_time - sent_messages_cache[cache_key] < 10:
+    key = f"{user_id}_{video_url}"
+    if key in last_action_time and current_time - last_action_time[key] < 5:
         return
-    sent_messages_cache[cache_key] = current_time
+    last_action_time[key] = current_time
 
     try:
         params = {"user_id": user_id}
@@ -189,9 +188,9 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот для MAX запущен с усиленной защитой от дублей!")
+    print("Бот запущен с жесткой фильтрацией дублей!")
     current_marker = None
-    processed_callbacks = set()
+    global processed_updates
 
     while True:
         try:
@@ -214,23 +213,30 @@ def main():
                 
                 updates = data.get("updates", [])
                 
-                if len(processed_callbacks) > 500:
-                    processed_callbacks.clear()
+                # Очищаем кэш старых апдейтов, чтобы не переполнять память
+                if len(processed_updates) > 2000:
+                    processed_updates.clear()
 
                 for update in updates:
+                    # Пытаемся вытащить уникальный идентификатор события
+                    up_id = update.get("update_id") or update.get("id")
+                    if not up_id:
+                        # Если ID нет, генерируем уникальный слепок по содержимому
+                        up_id = str(update)
+                    
+                    if up_id in processed_updates:
+                        continue
+                    processed_updates.add(up_id)
+
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
-                    # Обработка нажатий на кнопки качества
                     if event_type == "message_callback" or callback:
                         if not callback and "callback_id" in update:
                             callback = update
                             
                         callback_id = callback.get("callback_id")
-                        if callback_id in processed_callbacks:
-                            continue
                         if callback_id:
-                            processed_callbacks.add(callback_id)
                             answer_callback(callback_id)
                             
                         data_payload = callback.get("payload", "")
@@ -260,7 +266,6 @@ def main():
                             download_and_send_video(target_params, int(res_str), video_url, msg_id)
                         continue
 
-                    # Обработка новых текстовых сообщений со ссылками
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
                         user_id = (
