@@ -14,11 +14,19 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Множество для защиты от дублей (чтобы бот не реагировал дважды на один апдейт)
-processed_updates = set()
-processed_callbacks = set()
+# Словарь для защиты от дублей от платформы (хранит время последнего запроса от пользователя)
+user_last_click = {}
 
 def send_message_with_qualities(user_id, video_url):
+    current_time = time.time()
+    cache_key = f"{user_id}_{video_url}"
+    
+    # Жесткая защита: если от этого пользователя за последние 10 секунд уже приходило меню для этой ссылки — игнорируем дубль
+    if cache_key in user_last_click and current_time - user_last_click[cache_key] < 10:
+        print(🛡️ Обнаружен дубль от сервера MAX, игнорируем...)
+        return
+    user_last_click[cache_key] = current_time
+
     try:
         params = {"user_id": user_id}
         data = {
@@ -105,11 +113,12 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
     }
     
     try:
+        # Предупреждаем пользователя, что для длинных видео нужно время
         requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
             params=target_params,
-            json={"text": f"⏳ Скачиваю и подготавливаю видео ({resolution}p)..."},
+            json={"text": f"⏳ Скачиваю видео ({resolution}p). Если видео длинное (например, на час), это может занять пару минут, подождите..."},
             verify=False,
             timeout=15
         )
@@ -177,9 +186,9 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот запущен и защищен от дублей!")
+    print("Бот запущен с защитой от дублей со стороны платформы!")
     current_marker = None
-    global processed_updates, processed_callbacks
+    processed_callbacks = set()
 
     while True:
         try:
@@ -201,20 +210,10 @@ def main():
                     current_marker = data["marker"]
                 
                 updates = data.get("updates", [])
-                
-                # Очищаем память, если кэш стал слишком большим
-                if len(processed_updates) > 1000:
-                    processed_updates.clear()
                 if len(processed_callbacks) > 500:
                     processed_callbacks.clear()
 
                 for update in updates:
-                    # Защита по ID обновления
-                    up_id = update.get("update_id") or update.get("id") or str(update)
-                    if up_id in processed_updates:
-                        continue
-                    processed_updates.add(up_id)
-
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
