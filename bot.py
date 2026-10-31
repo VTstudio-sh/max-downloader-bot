@@ -1,11 +1,8 @@
 import os
 import time
-import json
 import requests
 import urllib3
 import yt_dlp
-import threading
-import sqlite3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -16,71 +13,6 @@ HEADERS = {
     "Authorization": TOKEN,
     "Content-Type": "application/json"
 }
-
-STATE_FILE = "state.json"
-DB_FILE = "bot_history.db"
-download_locks = {}
-lock_mutex = threading.Lock()
-
-# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    # Таблица для юзеров: храним ID и время последнего действия
-    cursor.execute('''CREATE TABLE IF NOT EXISTS user_cooldowns
-                      (user_id TEXT PRIMARY KEY, last_action_time REAL)''')
-    conn.commit()
-    conn.close()
-
-def check_and_set_cooldown(user_id, cooldown_seconds=5.0):
-    """
-    Проверяет, не действует ли на пользователя блокировка.
-    Если нет - ставит блокировку и возвращает True (можно обрабатывать).
-    Если блокировка есть - возвращает False (это дубль).
-    """
-    if not user_id:
-        return True
-        
-    user_id_str = str(user_id)
-    current_time = time.time()
-    
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT last_action_time FROM user_cooldowns WHERE user_id = ?", (user_id_str,))
-        row = cursor.fetchone()
-        
-        if row:
-            last_time = row[0]
-            if current_time - last_time < cooldown_seconds:
-                # Пользователь в карантине
-                return False
-                
-        # Обновляем время действия (или вставляем нового юзера)
-        cursor.execute('''INSERT INTO user_cooldowns (user_id, last_action_time) 
-                          VALUES (?, ?) 
-                          ON CONFLICT(user_id) DO UPDATE SET last_action_time=excluded.last_action_time''', 
-                       (user_id_str, current_time))
-        conn.commit()
-        return True
-    finally:
-        conn.close()
-# ---------------------------------
-
-def load_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, 'r') as f:
-                return json.load(f)
-        except: pass
-    return {"marker": None}
-
-def save_state(marker):
-    try:
-        with open(STATE_FILE, 'w') as f:
-            json.dump({"marker": marker}, f)
-    except Exception as e:
-        print(f"Ошибка сохранения: {e}")
 
 def send_message_with_qualities(user_id, video_url):
     try:
@@ -107,30 +39,50 @@ def send_message_with_qualities(user_id, video_url):
         }
         requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data, verify=False, timeout=15)
     except Exception as e:
-        print(f"Ошибка отправки меню: {e}")
+        print(f"Ошибка отправки меню качества: {e}")
 
 def answer_callback(callback_id):
     try:
-        requests.post(f"{BASE_URL}/answers", headers=HEADERS, json={"callback_id": callback_id}, verify=False, timeout=10)
+        requests.post(
+            f"{BASE_URL}/answers", 
+            headers=HEADERS, 
+            json={"callback_id": callback_id}, 
+            verify=False, 
+            timeout=10
+        )
     except Exception as e:
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
+    """Двухэтапная загрузка: берем токен из Шага 1 и заливаем файл"""
     try:
+        # Шаг 1: Получаем URL для загрузки и готовый token
         step1_url = "https://platform-api2.max.ru/uploads"
         params = {"type": "video"}
-        step1_headers = {"Accept": "application/json", "Authorization": TOKEN}
+        step1_headers = {
+            "Accept": "application/json",
+            "Authorization": TOKEN
+        }
         
         print(f"Шаг 1: Запрос ссылки и токена...")
         res1 = requests.post(step1_url, params=params, headers=step1_headers, verify=False, timeout=15)
-        if res1.status_code != 200: return None
+        print(f"Ответ Шага 1 (статус {res1.status_code}): {res1.text}")
+        
+        if res1.status_code != 200:
+            return None
             
         data1 = res1.json()
         upload_url = data1.get("url")
-        file_token = data1.get("token")
-        if not upload_url: return None
+        file_token = data1.get("token") # Токен уже здесь!
+        
+        if not upload_url:
+            print(f"Не найдена ссылка 'url' в ответе: {data1}")
+            return None
             
-        print(f"Шаг 2: Загрузка файла...")
+        # Шаг 2: Отправляем сам файл на полученный URL
+        print(f"Шаг 2: Загрузка файла на полученный URL...")
+        
+        res2 = None
         with open(video_path, 'rb') as f:
             files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
             res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
@@ -140,92 +92,133 @@ def upload_video_to_max(video_path):
                 files = {'data': f}
                 res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
             
-        return file_token if res2.status_code == 200 else None
+        print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
+            
+        if res2.status_code == 200:
+            # Возвращаем токен, полученный на Шаге 1
+            return file_token
+        else:
+            print(f"Ошибка при загрузке файла на URL: {res2.status_code} - {res2.text}")
+            return None
     except Exception as e:
-        print(f"Исключение при загрузке: {e}")
+        print(f"Исключение при двухэтапной загрузке видео в MAX: {e}")
         return None
 
-def download_and_send_video(target_params, resolution, video_url, message_id, user_id):
-    lock_key = f"{user_id}_{resolution}"
-    with lock_mutex:
-        if lock_key in download_locks and download_locks[lock_key].is_alive():
-            print(f"Видео уже качается. Игнорируем.")
-            return
-        download_locks[lock_key] = threading.Event()
-
-    temp_filename = f"temp_{int(time.time())}_{resolution}.mp4"
+def download_and_send_video(target_params, resolution, video_url, message_id):
+    temp_filename = f"temp_{int(time.time())}.mp4"
+    
     ydl_opts = {
         'format': f'best[height<={resolution}][ext=mp4]/best[ext=mp4]/best',
-        'outtmpl': temp_filename, 'quiet': True, 'no_check_certificate': True,
-        'socket_timeout': 30, 'geo_bypass': True,
+        'outtmpl': temp_filename,
+        'quiet': True,
+        'no_check_certificate': True,
     }
     
     try:
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params,
-            json={"text": f"⏳ Скачиваю и подготавливаю видео ({resolution}p)..."}, verify=False, timeout=15)
+        requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json={"text": f"⏳ Скачиваю и подготавливаю видео ({resolution}p)..."},
+            verify=False,
+            timeout=15
+        )
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             title = info.get('title', 'Видеофайл')
             
-        if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
-            raise Exception("Файл пустой.")
+        if not os.path.exists(temp_filename):
+            raise Exception("Не удалось скачать видеофайл.")
             
-        print(f"Видео скачано. Загружаем в MAX...")
+        print(f"Видео скачано локально: {temp_filename}. Загружаем в MAX...")
+        
         file_token = upload_video_to_max(temp_filename)
-        if not file_token: raise Exception("Не удалось получить токен файла.")
+        
+        if not file_token:
+            raise Exception("Не удалось получить токен загруженного файла от сервера MAX.")
             
         video_payload = {
             "text": f"🎬 {title[:100]} ({resolution}p)",
-            "attachments": [{"type": "video", "payload": {"token": file_token}}]
+            "attachments": [
+                {
+                    "type": "video",
+                    "payload": {
+                        "token": file_token
+                    }
+                }
+            ]
         }
         
-        requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params, json=video_payload, verify=False, timeout=15)
+        res = requests.post(
+            f"{BASE_URL}/messages",
+            headers=HEADERS,
+            params=target_params,
+            json=video_payload,
+            verify=False,
+            timeout=15
+        )
+        
+        print(f"Ответ API на отправку видео с токеном: статус {res.status_code}, тело: {res.text}")
 
         if message_id:
             try:
                 edit_params = target_params.copy()
                 edit_params["message_id"] = message_id
                 requests.delete(f"{BASE_URL}/messages", headers=HEADERS, params=edit_params, verify=False, timeout=10)
-            except: pass
+            except:
+                pass
                 
     except Exception as e:
         print(f"❌ Ошибка: {e}")
         try:
-            requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=target_params,
-                json={"text": f"❌ Ошибка при обработке видео ({resolution}p): {e}"}, verify=False, timeout=15)
-        except: pass
+            requests.post(
+                f"{BASE_URL}/messages",
+                headers=HEADERS,
+                params=target_params,
+                json={"text": f"❌ Ошибка при обработке видео ({resolution}p): {e}"},
+                verify=False,
+                timeout=15
+            )
+        except:
+            pass
+            
     finally:
         if os.path.exists(temp_filename):
-            try: os.remove(temp_filename)
-            except: pass
-        with lock_mutex:
-            if lock_key in download_locks: del download_locks[lock_key]
+            try:
+                os.remove(temp_filename)
+            except:
+                pass
 
 def main():
-    print("Бот запущен! Включен глобальный карантин для пользователей в БД (5 сек).")
-    init_db()
+    print("Бот запущен и готов к работе!")
     
-    state = load_state()
-    current_marker = state.get("marker")
-    
+    current_marker = None
+
     while True:
         try:
             params = {'timeout': 30}
-            if current_marker: params['marker'] = current_marker
+            if current_marker:
+                params['marker'] = current_marker
                 
-            response = requests.get(f"{BASE_URL}/updates", headers=HEADERS, params=params, verify=False, timeout=45)
+            response = requests.get(
+                f"{BASE_URL}/updates", 
+                headers=HEADERS, 
+                params=params,
+                verify=False,
+                timeout=45
+            )
             
             if response.status_code == 200:
                 data = response.json()
-                new_marker = data.get("marker")
-                updates = data.get("updates", [])
+                if "marker" in data:
+                    current_marker = data["marker"]
                 
+                updates = data.get("updates", [])
                 for update in updates:
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
-                    # === КНОПКИ ===
                     if event_type == "message_callback" or callback:
                         if not callback and "callback_id" in update:
                             callback = update
@@ -237,54 +230,50 @@ def main():
                         chat_id = message.get("chat_id") or update.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
                         
-                        # Проверка карантина для юзера (любое нажатие блокирует его на 5 сек)
-                        if not check_and_set_cooldown(user_id, 5.0):
-                            print(f"Дубль кнопки от {user_id} заблокирован БД.")
-                            if callback_id: answer_callback(callback_id)
-                            continue
+                        msg_id = (
+                            message.get("message_id") or 
+                            message.get("body", {}).get("message_id") or 
+                            callback.get("message_id") or
+                            update.get("message_id") or
+                            update.get("message_callback", {}).get("message_id")
+                        )
+                        
+                        if callback_id:
+                            answer_callback(callback_id)
                             
-                        if callback_id: answer_callback(callback_id)
-                        
-                        msg_id = (message.get("message_id") or message.get("body", {}).get("message_id") or 
-                                  callback.get("message_id") or update.get("message_id") or 
-                                  update.get("message_callback", {}).get("message_id"))
-                        
                         if chat_id is None or chat_id == 0 or chat_id == "0":
-                            if user_id: target_params = {"user_id": int(user_id)}
-                            else: continue
-                        else: target_params = {"chat_id": chat_id}
+                            if user_id:
+                                target_params = {"user_id": int(user_id)}
+                            else:
+                                continue
+                        else:
+                            target_params = {"chat_id": chat_id}
                         
                         if "|" in data_payload:
                             res_str, video_url = data_payload.split("|", 1)
-                            threading.Thread(target=download_and_send_video, 
-                                args=(target_params, int(res_str), video_url, msg_id, user_id)).start()
+                            download_and_send_video(target_params, int(res_str), video_url, msg_id)
                         continue
 
-                    # === ТЕКСТ ===
                     if event_type == "message_created" or "message" in update:
                         msg = update.get("message", update)
+                        user_id = (
+                            msg.get("sender", {}).get("user_id") or
+                            msg.get("from", {}).get("id") or
+                            msg.get("user_id")
+                        )
+                        
                         body = msg.get("body", {})
-                        user_id = (msg.get("sender", {}).get("user_id") or msg.get("from", {}).get("id") or msg.get("user_id"))
                         text = body.get("text") or msg.get("text", "")
                         
                         if user_id and text and "http" in text:
-                            # Проверка карантина для юзера (любое сообщение блокирует на 5 сек)
-                            if not check_and_set_cooldown(user_id, 5.0):
-                                print(f"Дубль сообщения от {user_id} заблокирован БД.")
-                                continue
-                                
                             words = text.split()
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
-
-                if new_marker:
-                    current_marker = new_marker
-                    save_state(current_marker)
             else:
-                time.sleep(3)
+                time.sleep(5)
         except Exception as e:
             print(f"Ошибка в общем цикле: {e}")
-            time.sleep(3)
+            time.sleep(5)
 
 if __name__ == '__main__':
     main()
