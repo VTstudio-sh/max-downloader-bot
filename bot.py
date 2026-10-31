@@ -14,6 +14,9 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Множество для защиты от дублирования сообщений/нажатий
+processed_updates = set()
+
 def send_message_with_qualities(user_id, video_url):
     try:
         params = {"user_id": user_id}
@@ -54,9 +57,7 @@ def answer_callback(callback_id):
         print(f"Ошибка ответа на callback: {e}")
 
 def upload_video_to_max(video_path):
-    """Двухэтапная загрузка: берем токен из Шага 1 и заливаем файл"""
     try:
-        # Шаг 1: Получаем URL для загрузки и готовый token
         step1_url = "https://platform-api2.max.ru/uploads"
         params = {"type": "video"}
         step1_headers = {
@@ -66,23 +67,17 @@ def upload_video_to_max(video_path):
         
         print(f"Шаг 1: Запрос ссылки и токена...")
         res1 = requests.post(step1_url, params=params, headers=step1_headers, verify=False, timeout=15)
-        print(f"Ответ Шага 1 (статус {res1.status_code}): {res1.text}")
-        
         if res1.status_code != 200:
             return None
             
         data1 = res1.json()
         upload_url = data1.get("url")
-        file_token = data1.get("token") # Токен уже здесь!
+        file_token = data1.get("token")
         
         if not upload_url:
-            print(f"Не найдена ссылка 'url' в ответе: {data1}")
             return None
             
-        # Шаг 2: Отправляем сам файл на полученный URL
         print(f"Шаг 2: Загрузка файла на полученный URL...")
-        
-        res2 = None
         with open(video_path, 'rb') as f:
             files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
             res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
@@ -92,16 +87,12 @@ def upload_video_to_max(video_path):
                 files = {'data': f}
                 res2 = requests.post(upload_url, files=files, verify=False, timeout=180)
             
-        print(f"Ответ Шага 2 (статус {res2.status_code}): {res2.text}")
-            
         if res2.status_code == 200:
-            # Возвращаем токен, полученный на Шаге 1
             return file_token
         else:
-            print(f"Ошибка при загрузке файла на URL: {res2.status_code} - {res2.text}")
             return None
     except Exception as e:
-        print(f"Исключение при двухэтапной загрузке видео в MAX: {e}")
+        print(f"Исключение при загрузке в MAX: {e}")
         return None
 
 def download_and_send_video(target_params, resolution, video_url, message_id):
@@ -112,6 +103,8 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
         'outtmpl': temp_filename,
         'quiet': True,
         'no_check_certificate': True,
+        'socket_timeout': 30,
+        'geo_bypass': True,
     }
     
     try:
@@ -128,11 +121,10 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             info = ydl.extract_info(video_url, download=True)
             title = info.get('title', 'Видеофайл')
             
-        if not os.path.exists(temp_filename):
-            raise Exception("Не удалось скачать видеофайл.")
+        if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+            raise Exception("Не удалось скачать видеофайл или файл пустой.")
             
-        print(f"Видео скачано локально: {temp_filename}. Загружаем в MAX...")
-        
+        print(f"Видео скачано локально. Загружаем в MAX...")
         file_token = upload_video_to_max(temp_filename)
         
         if not file_token:
@@ -150,7 +142,7 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             ]
         }
         
-        res = requests.post(
+        requests.post(
             f"{BASE_URL}/messages",
             headers=HEADERS,
             params=target_params,
@@ -158,8 +150,6 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
             verify=False,
             timeout=15
         )
-        
-        print(f"Ответ API на отправку видео с токеном: статус {res.status_code}, тело: {res.text}")
 
         if message_id:
             try:
@@ -191,9 +181,9 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот запущен и готов к работе!")
-    
+    print("Бот для MAX запущен и защищен от дублей!")
     current_marker = None
+    global processed_updates
 
     while True:
         try:
@@ -215,7 +205,17 @@ def main():
                     current_marker = data["marker"]
                 
                 updates = data.get("updates", [])
+                
+                # Очищаем старые апдейты, чтобы память не забивалась (держим последние 1000)
+                if len(processed_updates) > 1000:
+                    processed_updates.clear()
+
                 for update in updates:
+                    update_id = update.get("update_id") or id(update)
+                    if update_id in processed_updates:
+                        continue
+                    processed_updates.add(update_id)
+
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
