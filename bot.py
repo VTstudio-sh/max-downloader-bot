@@ -6,7 +6,6 @@ import urllib3
 import yt_dlp
 import threading
 import sqlite3
-import hashlib
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -27,33 +26,45 @@ lock_mutex = threading.Lock()
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Таблица для хранения хэшей обработанных сообщений
-    cursor.execute('''CREATE TABLE IF NOT EXISTS processed_events
-                      (event_hash TEXT PRIMARY KEY, timestamp REAL)''')
+    # Таблица для юзеров: храним ID и время последнего действия
+    cursor.execute('''CREATE TABLE IF NOT EXISTS user_cooldowns
+                      (user_id TEXT PRIMARY KEY, last_action_time REAL)''')
     conn.commit()
     conn.close()
 
-def is_event_processed(event_hash):
-    """Проверяет, было ли событие раньше, и записывает его, если нет"""
+def check_and_set_cooldown(user_id, cooldown_seconds=5.0):
+    """
+    Проверяет, не действует ли на пользователя блокировка.
+    Если нет - ставит блокировку и возвращает True (можно обрабатывать).
+    Если блокировка есть - возвращает False (это дубль).
+    """
+    if not user_id:
+        return True
+        
+    user_id_str = str(user_id)
+    current_time = time.time()
+    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        # Пытаемся вставить хэш. Если он уже есть (PRIMARY KEY), SQLite выдаст ошибку IntegrityError
-        cursor.execute("INSERT INTO processed_events (event_hash, timestamp) VALUES (?, ?)", (event_hash, time.time()))
+        cursor.execute("SELECT last_action_time FROM user_cooldowns WHERE user_id = ?", (user_id_str,))
+        row = cursor.fetchone()
+        
+        if row:
+            last_time = row[0]
+            if current_time - last_time < cooldown_seconds:
+                # Пользователь в карантине
+                return False
+                
+        # Обновляем время действия (или вставляем нового юзера)
+        cursor.execute('''INSERT INTO user_cooldowns (user_id, last_action_time) 
+                          VALUES (?, ?) 
+                          ON CONFLICT(user_id) DO UPDATE SET last_action_time=excluded.last_action_time''', 
+                       (user_id_str, current_time))
         conn.commit()
-        return False # Событие новое
-    except sqlite3.IntegrityError:
-        return True # Событие уже было в базе
+        return True
     finally:
         conn.close()
-
-def cleanup_db():
-    """Удаляет старые записи из базы, чтобы она не росла бесконечно (оставляем за последние 24 часа)"""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM processed_events WHERE timestamp < ?", (time.time() - 86400,))
-    conn.commit()
-    conn.close()
 # ---------------------------------
 
 def load_state():
@@ -192,21 +203,14 @@ def download_and_send_video(target_params, resolution, video_url, message_id, us
             if lock_key in download_locks: del download_locks[lock_key]
 
 def main():
-    print("Бот запущен! Используется база данных SQLite для 100% защиты от дублей.")
+    print("Бот запущен! Включен глобальный карантин для пользователей в БД (5 сек).")
     init_db()
-    cleanup_db() # Чистим старье при старте
     
     state = load_state()
     current_marker = state.get("marker")
-    last_cleanup = time.time()
     
     while True:
         try:
-            # Раз в час чистим старые записи из базы
-            if time.time() - last_cleanup > 3600:
-                cleanup_db()
-                last_cleanup = time.time()
-
             params = {'timeout': 30}
             if current_marker: params['marker'] = current_marker
                 
@@ -233,10 +237,8 @@ def main():
                         chat_id = message.get("chat_id") or update.get("chat_id")
                         user_id = callback.get("user", {}).get("user_id") or callback.get("user_id") or update.get("user_id")
                         
-                        # Создаем хэш нажатия кнопки (юзер + данные кнопки)
-                        event_hash = hashlib.md5(f"cb_{user_id}_{data_payload}".encode()).hexdigest()
-                        
-                        if is_event_processed(event_hash):
+                        # Проверка карантина для юзера (любое нажатие блокирует его на 5 сек)
+                        if not check_and_set_cooldown(user_id, 5.0):
                             print(f"Дубль кнопки от {user_id} заблокирован БД.")
                             if callback_id: answer_callback(callback_id)
                             continue
@@ -266,10 +268,8 @@ def main():
                         text = body.get("text") or msg.get("text", "")
                         
                         if user_id and text and "http" in text:
-                            # Создаем хэш текста (юзер + текст)
-                            event_hash = hashlib.md5(f"msg_{user_id}_{text}".encode()).hexdigest()
-                            
-                            if is_event_processed(event_hash):
+                            # Проверка карантина для юзера (любое сообщение блокирует на 5 сек)
+                            if not check_and_set_cooldown(user_id, 5.0):
                                 print(f"Дубль сообщения от {user_id} заблокирован БД.")
                                 continue
                                 
