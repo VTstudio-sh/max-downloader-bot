@@ -14,10 +14,17 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Множество для защиты от дублирования сообщений/нажатий
-processed_updates = set()
+# Словарь для защиты от повторной отправки меню по той же ссылке (храним время последнего запроса)
+last_requests = {}
 
 def send_message_with_qualities(user_id, video_url):
+    current_time = time.time()
+    # Защита: если для этого юзера такая ссылка приходила менее чем 5 секунд назад — игнорируем
+    key = f"{user_id}_{video_url}"
+    if key in last_requests and current_time - last_requests[key] < 5:
+        return
+    last_requests[key] = current_time
+
     try:
         params = {"user_id": user_id}
         data = {
@@ -181,9 +188,9 @@ def download_and_send_video(target_params, resolution, video_url, message_id):
                 pass
 
 def main():
-    print("Бот для MAX запущен и защищен от дублей!")
+    print("Бот для MAX запущен без дублей!")
     current_marker = None
-    global processed_updates
+    processed_callbacks = set()
 
     while True:
         try:
@@ -206,16 +213,11 @@ def main():
                 
                 updates = data.get("updates", [])
                 
-                # Очищаем старые апдейты, чтобы память не забивалась (держим последние 1000)
-                if len(processed_updates) > 1000:
-                    processed_updates.clear()
+                # Очищаем старые кэшированные callback_id чтобы не забивать память
+                if len(processed_callbacks) > 500:
+                    processed_callbacks.clear()
 
                 for update in updates:
-                    update_id = update.get("update_id") or id(update)
-                    if update_id in processed_updates:
-                        continue
-                    processed_updates.add(update_id)
-
                     event_type = update.get("type")
                     callback = update.get("callback") or update.get("message_callback", {}).get("callback")
                     
@@ -224,6 +226,14 @@ def main():
                             callback = update
                             
                         callback_id = callback.get("callback_id")
+                        
+                        # Защита от повторного нажатия одной и той же кнопки
+                        if callback_id in processed_callbacks:
+                            continue
+                        if callback_id:
+                            processed_callbacks.add(callback_id)
+                            answer_callback(callback_id)
+                            
                         data_payload = callback.get("payload", "")
                         message = update.get("message", {})
                         
@@ -238,9 +248,6 @@ def main():
                             update.get("message_callback", {}).get("message_id")
                         )
                         
-                        if callback_id:
-                            answer_callback(callback_id)
-                            
                         if chat_id is None or chat_id == 0 or chat_id == "0":
                             if user_id:
                                 target_params = {"user_id": int(user_id)}
@@ -270,10 +277,10 @@ def main():
                             url = next((w for w in words if w.startswith("http")), text)
                             send_message_with_qualities(int(user_id), url)
             else:
-                time.sleep(5)
+                time.sleep(3)
         except Exception as e:
             print(f"Ошибка в общем цикле: {e}")
-            time.sleep(5)
+            time.sleep(3)
 
 if __name__ == '__main__':
     main()
